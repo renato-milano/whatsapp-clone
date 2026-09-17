@@ -1,0 +1,13 @@
+WhatsApp Chat Export/
+data/
+.env
+.env.*
+node_modules/
+**/node_modules/
+**/dist/
+.git/
+*.zip
+*.sqlite*
+*.db*
+*.log
+.DS_Store

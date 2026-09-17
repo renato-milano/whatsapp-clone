@@ -1,0 +1,64 @@
+import { z } from "zod";
+
+export const readinessSchema = z.object({
+  status: z.literal("ready"),
+  database: z.literal("ok"),
+  storage: z.literal("ok"),
+});
+
+export type Readiness = z.infer<typeof readinessSchema>;
+
+// Foundation diagnostics only: chat rooms will require authenticated membership.
+export type ChatMessage = {
+  id: string;
+  conversationId: string;
+  memberId: string;
+  authorName: string;
+  body: string;
+  createdAt: string;
+  replyTo?: { id: string; authorName: string; body: string };
+  editedAt?: string;
+  deletedAt?: string;
+  reaction?: { emoji: string; count: number; mine: boolean; names?: string[] };
+  attachment?: { id: string; filename: string; mimeType: string; size: number; viewOnce?: boolean; consumedAt?: string };
+};
+
+export interface ServerEvents {
+  "service.ready": (payload: { status: "connected" }) => void;
+  "chat.message.created": (message: ChatMessage) => void;
+  "chat.typing": (payload: {
+    memberId: string;
+    displayName: string;
+    isTyping: boolean;
+  }) => void;
+  "chat.message.updated": (message: ChatMessage) => void;
+  "chat.message.deleted": (payload: { id: string; deletedAt: string }) => void;
+  "chat.message.reaction": (payload: {
+    messageId: string;
+    emoji?: string;
+    count: number;
+    memberId: string;
+    displayName: string;
+  }) => void;
+}
+
+export interface ClientEvents {
+  "service.ping": (ack: (payload: { status: "ok" }) => void) => void;
+  "chat.message.send": (
+    payload: { body: string; replyToId?: string },
+    ack: (result: { message?: ChatMessage; error?: string }) => void,
+  ) => void;
+  "chat.typing": (payload: { isTyping: boolean }) => void;
+  "chat.message.edit": (
+    payload: { id: string; body: string },
+    ack: (result: { message?: ChatMessage; error?: string }) => void,
+  ) => void;
+  "chat.message.delete": (
+    payload: { id: string },
+    ack: (result: { ok?: boolean; error?: string }) => void,
+  ) => void;
+  "chat.message.react": (
+    payload: { messageId: string; emoji: string },
+    ack: (result: { ok?: boolean; error?: string }) => void,
+  ) => void;
+}

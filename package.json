@@ -1,0 +1,31 @@
+{
+  "name": "private-chat",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.18.0 <23"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run build -w @private-chat/contracts && concurrently -k -n contracts,api,web \"npm run dev -w @private-chat/contracts\" \"npm run dev -w @private-chat/server\" \"npm run dev -w @private-chat/web\"",
+    "build": "npm run build -w @private-chat/contracts && npm run build -w @private-chat/web && npm run build -w @private-chat/server",
+    "typecheck": "npm run build -w @private-chat/contracts && npm run typecheck --workspaces --if-present",
+    "test": "npm run build -w @private-chat/contracts && npm run test -w @private-chat/server",
+    "import:whatsapp": "tsx scripts/import-whatsapp.ts",
+    "check": "npm run typecheck && npm test && npm run build",
+    "start": "node apps/server/dist/index.js",
+    "format": "prettier --write apps packages db package.json tsconfig.base.json railway.json",
+    "format:check": "prettier --check apps packages db package.json tsconfig.base.json railway.json"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.3",
+    "concurrently": "10.0.5",
+    "prettier": "3.9.7",
+    "tsx": "4.23.13",
+    "typescript": "7.0.2"
+  }
+}
