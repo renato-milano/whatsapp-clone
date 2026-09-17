@@ -239,7 +239,7 @@ export async function buildApp(options: AppOptions) {
     if (options.staticRoot)
       reply.header(
         "Content-Security-Policy",
-        "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+        "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
       );
     if (request.url.startsWith("/api/") || request.url.startsWith("/health/"))
       reply.header("Cache-Control", "no-store");
