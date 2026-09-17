@@ -908,8 +908,8 @@ function Chat({
             <article
               className={
                 message.memberId === conversation.member.id
-                  ? `message mine${highlightMessage === message.id ? " highlight" : ""}`
-                  : `message${highlightMessage === message.id ? " highlight" : ""}`
+                  ? `message mine${index > 0 && messages[index - 1]?.memberId === message.memberId ? " grouped" : ""}${highlightMessage === message.id ? " highlight" : ""}`
+                  : `message${index > 0 && messages[index - 1]?.memberId === message.memberId ? " grouped" : ""}${highlightMessage === message.id ? " highlight" : ""}`
               }
               ref={(element) => {
                 messageRefs.current[message.id] = element;
@@ -964,8 +964,10 @@ function Chat({
                   {message.replyTo.body}
                 </div>
               )}
-              <small>{message.authorName}</small>
-              <div>
+              {!index || messages[index - 1]?.memberId !== message.memberId ? (
+                <small>{message.authorName}</small>
+              ) : null}
+              <div className="message-content">
                 {message.attachment?.viewOnce && message.memberId !== conversation.member.id && !message.attachment.consumedAt && !consumedMedia.has(message.attachment.id) && (
                   <button
                     type="button"
@@ -1031,19 +1033,19 @@ function Chat({
                     {highlightSearch(message.body, search)}
                   </div>
                 )}
+                <time>
+                  {new Date(message.createdAt).toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
+                  {message.memberId === conversation.member.id && (
+                    <span className="checks">✓✓</span>
+                  )}
+                  {message.editedAt && (
+                    <span className="edited-label">modificato</span>
+                  )}
+                </time>
               </div>
-              <time>
-                {new Date(message.createdAt).toLocaleTimeString([], {
-                  hour: "2-digit",
-                  minute: "2-digit",
-                })}
-                {message.memberId === conversation.member.id && (
-                  <span className="checks">✓✓</span>
-                )}
-                {message.editedAt && (
-                  <span className="edited-label">modificato</span>
-                )}
-              </time>
               {reactions[message.id] && (
                 <span className="reaction-pill">
                   <small>{reactions[message.id]?.names.join(", ")}</small>
