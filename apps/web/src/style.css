@@ -928,9 +928,13 @@ mark {
   background: #000b;
   animation: lightbox-in 180ms ease-out;
 }
-.image-lightbox img {
+.image-lightbox img,
+.image-lightbox video {
+  display: block;
+  width: auto;
+  height: auto;
   max-width: calc(100vw - 48px);
-  max-height: 92vh;
+  max-height: calc(100dvh - 48px);
   object-fit: contain;
   border-radius: 8px;
 }
