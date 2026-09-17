@@ -1413,7 +1413,6 @@ function Chat({
               src={fullscreenVideo}
               controls
               autoPlay
-              preload="auto"
               playsInline
               onClick={(event) => event.stopPropagation()}
             />}

@@ -612,24 +612,11 @@ export async function buildApp(options: AppOptions) {
       .header("Accept-Ranges", "bytes")
       .header("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(row.filename)}`);
     if (range?.startsWith("bytes=")) {
-      const match = /^bytes=(\d*)-(\d*)$/.exec(range);
-      if (!match || (!match[1] && !match[2]))
-        return reply.code(416).header("Content-Range", `bytes */${size}`).send();
-      const [, startText, endText] = match;
-      const suffixLength = endText && !startText ? Number(endText) : 0;
-      const start = startText ? Number(startText) : Math.max(0, size - suffixLength);
-      const requestedEnd = endText && startText ? Number(endText) : size - 1;
-      const end = Number.isFinite(requestedEnd)
-        ? Math.min(requestedEnd, size - 1)
-        : size - 1;
-      if (
-        !Number.isInteger(start) ||
-        !Number.isInteger(end) ||
-        start < 0 ||
-        start >= size ||
-        end < start ||
-        (suffixLength !== 0 && suffixLength < 0)
-      )
+      const [startText, endText] = range.slice(6).split("-", 2);
+      const start = Number(startText);
+      const requestedEnd = endText ? Number(endText) : size - 1;
+      const end = Number.isFinite(requestedEnd) ? Math.min(requestedEnd, size - 1) : size - 1;
+      if (!Number.isInteger(start) || start < 0 || start >= size || end < start)
         return reply.code(416).header("Content-Range", `bytes */${size}`).send();
       return common
         .code(206)
