@@ -1044,9 +1044,19 @@ function Chat({
                     aria-label={`Riproduci audio ${message.attachment.filename}`}
                   />
                 )}
+                {!message.attachment?.viewOnce && message.attachment?.mimeType.startsWith("video/") && (
+                  <video
+                    className="message-video"
+                    controls
+                    preload="metadata"
+                    src={`/media/${message.attachment.id}`}
+                    aria-label={`Riproduci video ${message.attachment.filename}`}
+                  />
+                )}
                 {message.attachment &&
                   !message.attachment.mimeType.startsWith("image/") &&
-                  !message.attachment.mimeType.startsWith("audio/") && (
+                  !message.attachment.mimeType.startsWith("audio/") &&
+                  !message.attachment.mimeType.startsWith("video/") && (
                     <a
                       href={`/media/${message.attachment.id}`}
                       target="_blank"
