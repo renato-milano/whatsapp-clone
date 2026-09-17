@@ -641,6 +641,28 @@ footer {
   text-align: center;
   font-size: 17px;
 }
+.message-caption a {
+  color: #236d9a;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+.message-caption a:hover {
+  color: #174d70;
+}
+.copy-notice {
+  position: fixed;
+  left: 50%;
+  bottom: 86px;
+  z-index: 6;
+  transform: translateX(-50%);
+  padding: 8px 14px;
+  border-radius: 18px;
+  background: #183b31;
+  color: #fff;
+  box-shadow: 0 4px 14px #183b3140;
+  font-size: 12px;
+}
 .checks {
   color: #4c8aa0;
   margin-left: 5px;

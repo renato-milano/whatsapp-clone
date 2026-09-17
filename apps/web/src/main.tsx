@@ -1,4 +1,4 @@
-import { Fragment, StrictMode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, StrictMode, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { io, type Socket } from "socket.io-client";
 import { type ClientEvents, type ServerEvents } from "@private-chat/contracts";
@@ -42,6 +42,25 @@ function highlightSearch(text: string, query: string) {
       part
     ),
   );
+}
+function renderMessageBody(text: string, query: string): ReactNode {
+  const parts = text.split(/((?:https?:\/\/|www\.)[^\s<]+)/gi);
+  return parts.map((part, index) => {
+    if (!/^(?:https?:\/\/|www\.)/i.test(part))
+      return <Fragment key={`${part}-${index}`}>{highlightSearch(part, query)}</Fragment>;
+
+    const trailing = part.match(/[.,!?;:]+$/)?.[0] ?? "";
+    const url = trailing ? part.slice(0, -trailing.length) : part;
+    const href = /^https?:\/\//i.test(url) ? url : `https://${url}`;
+    return (
+      <Fragment key={`${part}-${index}`}>
+        <a href={href} target="_blank" rel="noreferrer">
+          {highlightSearch(url, query)}
+        </a>
+        {trailing}
+      </Fragment>
+    );
+  });
 }
 async function api<T>(path: string, init: RequestInit = {}) {
   const response = await fetch(path, {
@@ -379,6 +398,7 @@ function Chat({
   const [editingMessage, setEditingMessage] = useState<ChatMessage>();
   const [menuMessage, setMenuMessage] = useState<ChatMessage>();
   const [menuPosition, setMenuPosition] = useState({ x: 0, y: 0 });
+  const [copyNotice, setCopyNotice] = useState("");
   const [reactionTarget, setReactionTarget] = useState<string>();
   const [reactions, setReactions] = useState<
     Record<string, { emoji: string; count: number; names: string[] }>
@@ -396,6 +416,7 @@ function Chat({
   const pendingScrollRestore = useRef<{ top: number; height: number } | undefined>(undefined);
   const pendingSearchTarget = useRef<string | undefined>(undefined);
   const reconnectNoticeTimer = useRef<number | undefined>(undefined);
+  const copyNoticeTimer = useRef<number | undefined>(undefined);
   useLayoutEffect(() => {
     const searchTarget = pendingSearchTarget.current;
     if (searchTarget) {
@@ -678,6 +699,17 @@ function Chat({
         }
       },
     );
+  }
+  async function copyMessage(message: ChatMessage) {
+    try {
+      await navigator.clipboard.writeText(message.body);
+      setCopyNotice("Messaggio copiato");
+      window.clearTimeout(copyNoticeTimer.current);
+      copyNoticeTimer.current = window.setTimeout(() => setCopyNotice(""), 1800);
+    } catch {
+      setError("Non è stato possibile copiare il messaggio.");
+    }
+    setMenuMessage(undefined);
   }
   async function toggleRecording() {
     if (recording) {
@@ -1030,7 +1062,7 @@ function Chat({
                   </span>
                 ) : message.body && (
                   <div className="message-caption">
-                    {highlightSearch(message.body, search)}
+                    {renderMessageBody(message.body, search)}
                   </div>
                 )}
                 <time>
@@ -1102,6 +1134,9 @@ function Chat({
           className="message-menu"
           style={{ left: menuPosition.x, top: menuPosition.y }}
         >
+          <button onClick={() => void copyMessage(menuMessage)}>
+            <span aria-hidden="true">⧉</span> Copia
+          </button>
           <button
             onClick={() => {
               setReplyTo(menuMessage);
@@ -1145,6 +1180,11 @@ function Chat({
               </button>
             </>
           )}
+        </div>
+      )}
+      {copyNotice && (
+        <div className="copy-notice" role="status">
+          {copyNotice}
         </div>
       )}
       {showJumpToLatest && (
