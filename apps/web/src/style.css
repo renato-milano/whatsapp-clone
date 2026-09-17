@@ -868,6 +868,7 @@ footer {
   max-height: 260px;
   border-radius: 8px;
   background: #183b31;
+  cursor: pointer;
 }
 .view-once-toggle {
   display: flex;

@@ -1051,6 +1051,9 @@ function Chat({
                     preload="metadata"
                     src={`/media/${message.attachment.id}`}
                     aria-label={`Riproduci video ${message.attachment.filename}`}
+                    onClick={() =>
+                      setFullscreenVideo(`/media/${message.attachment!.id}`)
+                    }
                   />
                 )}
                 {message.attachment &&
