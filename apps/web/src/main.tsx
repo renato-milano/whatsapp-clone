@@ -1048,7 +1048,6 @@ function Chat({
               </div>
               {reactions[message.id] && (
                 <span className="reaction-pill">
-                  <small>{reactions[message.id]?.names.join(", ")}</small>
                   {reactions[message.id]?.emoji}
                   {(reactions[message.id]?.count ?? 0) > 1 &&
                     ` ${reactions[message.id]?.count}`}
@@ -1306,6 +1305,7 @@ function Chat({
             "👏",
             "😘",
             "🤗",
+            "🫂",
             "🧶",
             "✨",
             "💛",

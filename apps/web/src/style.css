@@ -1298,3 +1298,139 @@ footer p {
     bottom: 92px;
   }
 }
+
+/* Mobile: keep the same visual language while preserving the one-screen chat. */
+@media (max-width: 600px) {
+  body:has(.chat-shell),
+  .chat-shell {
+    background-color: #eeeae1;
+    background-image:
+      radial-gradient(#b9b1a455 0.5px, transparent 0.5px),
+      radial-gradient(#ffffff55 0.4px, transparent 0.4px),
+      radial-gradient(circle at 12% 18%, #e1d5c533 0, transparent 34%),
+      radial-gradient(circle at 86% 78%, #f7f2e955 0, transparent 38%);
+    background-position: 0 0, 7px 11px, 0 0, 0 0;
+    background-size: 17px 17px, 23px 23px, 100% 100%, 100% 100%;
+  }
+
+  .chat-shell {
+    padding: 0 14px;
+  }
+
+  .chat-shell > header {
+    background: #fbfdf9;
+    border-bottom-color: #d8e3d7;
+  }
+
+  .messages {
+    background-color: #eeeae1;
+    background-image:
+      radial-gradient(#b9b1a455 0.5px, transparent 0.5px),
+      radial-gradient(#ffffff55 0.4px, transparent 0.4px),
+      radial-gradient(circle at 12% 18%, #e1d5c533 0, transparent 34%),
+      radial-gradient(circle at 86% 78%, #f7f2e955 0, transparent 38%);
+    background-position: 0 0, 7px 11px, 0 0, 0 0;
+    background-size: 17px 17px, 23px 23px, 100% 100%, 100% 100%;
+    gap: 7px;
+    padding-top: 22px;
+    padding-bottom: 18px;
+  }
+
+  .message {
+    max-width: 88%;
+    padding: 8px 12px;
+    margin-bottom: 2px;
+    border-color: #d6e1d5;
+    background: linear-gradient(145deg, #ffffff 0%, #f8fbf7 100%);
+    box-shadow:
+      0 1px 1px #183b3110,
+      0 4px 11px #183b310c,
+      inset 0 1px 0 #ffffffcc;
+  }
+
+  .message.mine {
+    background: linear-gradient(145deg, #e2f7d9 0%, #d2edc5 100%);
+    border-color: #c3dfb9;
+    box-shadow:
+      0 1px 1px #183b3112,
+      0 4px 11px #42764b16,
+      inset 0 1px 0 #f3ffecaa;
+  }
+
+  .message.grouped {
+    margin-top: -4px;
+    padding-top: 7px;
+  }
+
+  .message-content {
+    position: relative;
+  }
+
+  .message-content:has(.message-image),
+  .message-content:has(.message-audio),
+  .message-content:has(.view-once-button),
+  .message-content:has(> a) {
+    padding-bottom: 21px;
+  }
+
+  .message-caption {
+    padding-right: 56px;
+  }
+
+  .message time {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    align-items: flex-end;
+    gap: 1px;
+    margin: 0;
+    transform: translateY(16%);
+    white-space: nowrap;
+    width: max-content;
+    flex-wrap: nowrap;
+    line-height: 1;
+  }
+
+  .checks {
+    display: inline-block;
+    margin-left: 3px;
+    letter-spacing: -3px;
+    transform: none;
+    white-space: nowrap;
+    line-height: 1;
+  }
+
+  .composer {
+    width: 100%;
+    max-width: none;
+    margin: 8px 0 12px;
+    padding: 6px 8px;
+    gap: 5px;
+    border-radius: 14px;
+    background: #fbfdf9;
+    border-color: #d6e1d5;
+    box-shadow: 0 4px 14px #183b3112;
+  }
+
+  .input-wrap {
+    min-height: 48px;
+    border-radius: 12px;
+    background: #ffffffcc;
+  }
+
+  .input-wrap textarea {
+    padding: 12px 10px;
+  }
+
+  .composer .submit {
+    width: 46px;
+    height: 46px;
+    min-width: 46px;
+  }
+
+  .unread-pill {
+    right: 22px;
+    bottom: 92px;
+  }
+}
