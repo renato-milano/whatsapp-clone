@@ -274,6 +274,22 @@ input:focus {
   font-size: 12px;
   margin: 0;
 }
+.reload-notice {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.reload-notice button {
+  min-height: 32px;
+  padding: 6px 12px;
+  border: 0;
+  border-radius: 16px;
+  background: #285e49;
+  color: #fff;
+  font-size: 12px;
+}
 .conversation-ready > p:not(.eyebrow) {
   max-width: 550px;
   color: #586f5f;

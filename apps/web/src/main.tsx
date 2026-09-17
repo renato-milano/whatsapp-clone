@@ -352,6 +352,7 @@ function Chat({
   const [body, setBody] = useState("");
   const [sendingBody, setSendingBody] = useState<string>();
   const [error, setError] = useState("");
+  const [reloadRequired, setReloadRequired] = useState(false);
   const [typingUser, setTypingUser] = useState<string>();
   const [copied, setCopied] = useState("");
   const [showEmoji, setShowEmoji] = useState(false);
@@ -394,6 +395,7 @@ function Chat({
   const recordingChunks = useRef<Blob[]>([]);
   const pendingScrollRestore = useRef<{ top: number; height: number } | undefined>(undefined);
   const pendingSearchTarget = useRef<string | undefined>(undefined);
+  const reconnectNoticeTimer = useRef<number | undefined>(undefined);
   useLayoutEffect(() => {
     const searchTarget = pendingSearchTarget.current;
     if (searchTarget) {
@@ -460,6 +462,8 @@ function Chat({
     });
     socketRef.current = socket;
     socket.on("connect", () => {
+      window.clearTimeout(reconnectNoticeTimer.current);
+      setReloadRequired(false);
       setError("");
       // A deploy replaces the Socket.IO process. Refresh the current window
       // after reconnect so messages missed during the rollout are recovered.
@@ -482,11 +486,17 @@ function Chat({
       }).catch(() => undefined);
     });
     socket.on("disconnect", (reason) => {
-      if (reason !== "io client disconnect")
-        setError("Connessione temporaneamente interrotta: riconnessione in corso…");
+      if (reason !== "io client disconnect") {
+        setError("");
+        window.clearTimeout(reconnectNoticeTimer.current);
+        reconnectNoticeTimer.current = window.setTimeout(() => {
+          setReloadRequired(true);
+          socket.disconnect();
+        }, 2500);
+      }
     });
     socket.on("connect_error", () => {
-      setError("Connessione temporaneamente interrotta: riconnessione in corso…");
+      setError("");
     });
     socket.on("chat.message.created", (message) => {
       if (message.memberId !== conversation.member.id && !atBottomRef.current)
@@ -530,6 +540,7 @@ function Chat({
         setTypingUser(payload.isTyping ? payload.displayName : undefined);
     });
     return () => {
+      window.clearTimeout(reconnectNoticeTimer.current);
       socket.disconnect();
       socketRef.current = null;
     };
@@ -1364,6 +1375,14 @@ function Chat({
               onClick={(event) => event.stopPropagation()}
             />}
         </div>
+      )}
+      {reloadRequired && (
+        <p className="form-error reload-notice">
+          C&apos;è stato un aggiornamento, aggiorna la pagina :)
+          <button type="button" onClick={() => window.location.reload()}>
+            Aggiorna pagina
+          </button>
+        </p>
       )}
       {error && <p className="form-error">{error}</p>}
     </main>
