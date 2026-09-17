@@ -451,8 +451,43 @@ function Chat({
       .catch((caught) =>
         setError(caught instanceof Error ? caught.message : "Errore"),
       );
-    const socket: Socket<ServerEvents, ClientEvents> = io();
+    const socket: Socket<ServerEvents, ClientEvents> = io({
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 500,
+      reconnectionDelayMax: 5000,
+      timeout: 10000,
+    });
     socketRef.current = socket;
+    socket.on("connect", () => {
+      setError("");
+      // A deploy replaces the Socket.IO process. Refresh the current window
+      // after reconnect so messages missed during the rollout are recovered.
+      void api<{ messages: ChatMessage[] }>("/api/v1/messages").then((result) => {
+        setMessages(result.messages);
+        setReactions(
+          Object.fromEntries(
+            result.messages
+              .filter((message) => message.reaction)
+              .map((message) => [
+                message.id,
+                {
+                  emoji: message.reaction!.emoji,
+                  count: message.reaction!.count,
+                  names: message.reaction!.names ?? [],
+                },
+              ]),
+          ),
+        );
+      }).catch(() => undefined);
+    });
+    socket.on("disconnect", (reason) => {
+      if (reason !== "io client disconnect")
+        setError("Connessione temporaneamente interrotta: riconnessione in corso…");
+    });
+    socket.on("connect_error", () => {
+      setError("Connessione temporaneamente interrotta: riconnessione in corso…");
+    });
     socket.on("chat.message.created", (message) => {
       if (message.memberId !== conversation.member.id && !atBottomRef.current)
         setUnreadCount((count) => count + 1);
@@ -592,6 +627,10 @@ function Chat({
       return;
     }
     if (!text || !socketRef.current) return;
+    if (!socketRef.current.connected) {
+      setError("Connessione in ripristino, riprova tra un momento.");
+      return;
+    }
     setShowEmoji(false);
     window.clearTimeout(typingTimer.current);
     socketRef.current.emit("chat.typing", { isTyping: false });
@@ -1357,12 +1396,6 @@ function App() {
       })
       .catch(() => undefined);
   }, [inviteLocator]);
-  useEffect(() => {
-    const socket: Socket<ServerEvents, ClientEvents> = io();
-    return () => {
-      socket.disconnect();
-    };
-  }, []);
   if (conversation)
     return (
       <Chat
