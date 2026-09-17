@@ -31,6 +31,7 @@ import {
   validateSecret,
 } from "./auth.js";
 
+const MAX_ATTACHMENT_SIZE = 100 * 1024 * 1024;
 
 
 export interface AppOptions {
@@ -56,7 +57,7 @@ export async function buildApp(options: AppOptions) {
   const stagingDir = join(options.dataDir, "staging");
   try {
     await app.register(multipart, {
-      limits: { fileSize: 10 * 1024 * 1024, files: 1 },
+      limits: { fileSize: MAX_ATTACHMENT_SIZE, files: 1 },
     });
     mkdirSync(mediaDir, { recursive: true, mode: 0o700 });
     mkdirSync(stagingDir, { recursive: true, mode: 0o700 });
@@ -641,6 +642,15 @@ export async function buildApp(options: AppOptions) {
     const id = randomUUID();
     const storagePath = join(mediaDir, id);
     await pipeline(part.file, createWriteStream(storagePath, { mode: 0o600 }));
+    if (part.file.truncated) {
+      unlinkSync(storagePath);
+      return apiError(
+        reply,
+        413,
+        "FILE_TOO_LARGE",
+        "Il file supera il limite di 100 MB.",
+      );
+    }
     const stat = (await import("node:fs/promises")).stat(storagePath);
     const size = (await stat).size;
     const messageId = randomUUID();
