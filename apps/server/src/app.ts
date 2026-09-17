@@ -583,11 +583,13 @@ export async function buildApp(options: AppOptions) {
     if (!auth) return reply.code(401).send();
     const row = db
       .prepare(
-        "SELECT a.storage_path, a.mime_type, a.filename, a.view_once AS viewOnce, a.consumed_at AS consumedAt FROM attachments a JOIN messages m ON m.id = a.message_id WHERE a.id = ? AND m.conversation_id = ?",
+        "SELECT a.storage_path, a.mime_type, a.filename, a.view_once AS viewOnce, a.consumed_at AS consumedAt, m.member_id AS senderMemberId FROM attachments a JOIN messages m ON m.id = a.message_id WHERE a.id = ? AND m.conversation_id = ?",
       )
       .get(request.params.id, auth.conversationId) as
-      { storage_path: string; mime_type: string; filename: string; viewOnce: number; consumedAt?: string } | undefined;
+      { storage_path: string; mime_type: string; filename: string; viewOnce: number; consumedAt?: string; senderMemberId: string } | undefined;
     if (!row || !existsSync(row.storage_path)) return reply.code(404).send();
+    if (row.viewOnce && row.senderMemberId === auth.memberId)
+      return reply.code(403).send();
     const size = statSync(row.storage_path).size;
     const responseMime = row.mime_type === "audio/mp4" && row.filename.toLowerCase().endsWith(".opus")
       ? "audio/ogg"

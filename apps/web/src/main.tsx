@@ -916,7 +916,7 @@ function Chat({
               )}
               <small>{message.authorName}</small>
               <div>
-                {message.attachment?.viewOnce && !message.attachment.consumedAt && !consumedMedia.has(message.attachment.id) && (
+                {message.attachment?.viewOnce && message.memberId !== conversation.member.id && !message.attachment.consumedAt && !consumedMedia.has(message.attachment.id) && (
                   <button
                     type="button"
                     className="view-once-button"
@@ -930,8 +930,11 @@ function Chat({
                     Apri {message.attachment.mimeType.startsWith("video/") ? "video" : "foto"}
                   </button>
                 )}
-                {message.attachment?.viewOnce && (message.attachment.consumedAt || consumedMedia.has(message.attachment.id)) && (
+                {message.attachment?.viewOnce && message.memberId !== conversation.member.id && (message.attachment.consumedAt || consumedMedia.has(message.attachment.id)) && (
                   <span className="view-once-consumed">Media aperto</span>
+                )}
+                {message.attachment?.viewOnce && message.memberId === conversation.member.id && (
+                  <span className="view-once-consumed">Media inviato</span>
                 )}
                 {!message.attachment?.viewOnce && message.attachment?.mimeType.startsWith("image/") && (
                   <img

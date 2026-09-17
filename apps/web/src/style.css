@@ -788,7 +788,8 @@ footer {
 .attachment-preview {
   position: absolute;
   left: 12px;
-  bottom: 58px;
+  bottom: calc(100% + 10px);
+  z-index: 4;
   padding: 5px;
   background: #fff;
   border: 1px solid #ccd8ca;
