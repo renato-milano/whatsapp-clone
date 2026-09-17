@@ -1017,6 +1017,21 @@ mark {
     -webkit-touch-callout: none;
   }
 }
+
+/* Reactions occupy their own line so they never collide with metadata or the next bubble. */
+.message .reaction-pill {
+  position: static;
+  display: block;
+  width: max-content;
+  max-width: calc(100% - 8px);
+  margin: 5px 0 0;
+  box-shadow: 0 2px 5px #183b3118;
+}
+
+.message.mine .reaction-pill {
+  margin-left: auto;
+  margin-right: 0;
+}
 footer p {
   max-width: 450px;
   margin: 0;
