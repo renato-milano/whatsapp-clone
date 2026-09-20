@@ -32,6 +32,7 @@ type SpotifyPlayer = {
   connect: () => Promise<boolean>;
   disconnect: () => void;
   addListener: (event: string, callback: (payload: any) => void) => void;
+  activateElement: () => Promise<void>;
   pause: () => Promise<void>;
 };
 declare global {
@@ -520,6 +521,9 @@ function Chat({
             setMusicPlayerReady(true);
           });
           player.addListener("not_ready", () => setMusicPlayerReady(false));
+          player.addListener("autoplay_failed", () => {
+            setError("Tocca di nuovo il brano per avviare l'audio.");
+          });
           player.addListener("player_state_changed", (payload) => {
             const position = payload?.position ?? 0;
             if (musicLoopTimerRef.current !== undefined)
@@ -840,6 +844,7 @@ function Chat({
       return;
     }
     try {
+      await spotifyPlayerRef.current?.activateElement();
       await api("/api/v1/spotify/play", {
         method: "PUT",
         body: JSON.stringify({
@@ -937,6 +942,9 @@ function Chat({
     const seconds = Math.floor(value / 1000);
     return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
   }
+  function messagePreview(message: ChatMessage) {
+    return message.body || message.music?.title || "Brano Spotify";
+  }
   useEffect(() => {
     const closeMenu = (event: PointerEvent) => {
       const target = event.target as HTMLElement;
@@ -967,7 +975,11 @@ function Chat({
         body: text,
         createdAt: new Date().toISOString(),
         replyTo: reply
-          ? { id: reply.id, authorName: reply.authorName, body: reply.body }
+          ? {
+              id: reply.id,
+              authorName: reply.authorName,
+              body: messagePreview(reply),
+            }
           : undefined,
         deliveryStatus: "uploading",
         attachment: {
@@ -1428,7 +1440,7 @@ function Chat({
                   >
                     <strong>{message.replyTo.authorName}</strong>
                     <br />
-                    {message.replyTo.body}
+                    {message.replyTo.body || "Brano Spotify"}
                   </div>
                 )}
                 {!index ||
@@ -1699,7 +1711,7 @@ function Chat({
       {replyTo && !editingMessage && (
         <div className="reply-compose">
           <strong>Rispondi a {replyTo.authorName}</strong>
-          <span>{replyTo.body}</span>
+          <span>{messagePreview(replyTo)}</span>
           <button onClick={() => setReplyTo(undefined)}>×</button>
         </div>
       )}
@@ -1881,7 +1893,7 @@ function Chat({
                     </button>
                   </div>
                   <div className="music-duration-select">
-                    <span>Durata del frammento</span>
+                    <span>Durata</span>
                     <div className="music-duration-control">
                       <button
                         type="button"
