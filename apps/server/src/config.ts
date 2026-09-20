@@ -35,5 +35,7 @@ export function readConfig() {
     publicOrigin: origin.origin,
     dataDir: resolve(projectRoot, process.env.DATA_DIR ?? "./data"),
     staticRoot: production ? resolve(projectRoot, "apps/web/dist") : undefined,
+    spotifyClientId: process.env.SPOTIFY_CLIENT_ID,
+    spotifyClientSecret: process.env.SPOTIFY_CLIENT_SECRET,
   };
 }

@@ -31,6 +31,17 @@ export type ChatMessage = {
     pending?: boolean;
   };
   deliveryStatus?: "uploading" | "failed";
+  music?: {
+    trackId: string;
+    trackUri: string;
+    title: string;
+    artist: string;
+    album: string;
+    imageUrl?: string;
+    spotifyUrl: string;
+    startMs: number;
+    endMs: number;
+  };
 };
 
 export interface ServerEvents {
@@ -55,7 +66,7 @@ export interface ServerEvents {
 export interface ClientEvents {
   "service.ping": (ack: (payload: { status: "ok" }) => void) => void;
   "chat.message.send": (
-    payload: { body: string; replyToId?: string },
+    payload: { body: string; replyToId?: string; music?: ChatMessage["music"] },
     ack: (result: { message?: ChatMessage; error?: string }) => void,
   ) => void;
   "chat.typing": (payload: { isTyping: boolean }) => void;

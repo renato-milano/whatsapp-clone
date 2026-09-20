@@ -261,7 +261,9 @@ input:focus {
   stroke-linejoin: round;
 }
 @keyframes recording-pulse {
-  50% { transform: scale(1.06); }
+  50% {
+    transform: scale(1.06);
+  }
 }
 .submit:hover {
   background: #235444;
@@ -382,7 +384,14 @@ footer {
   color: #365b46;
   opacity: 0.68;
 }
-.search-toggle svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.search-toggle svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
 .search-toggle:hover {
   background: #edf5e8;
 }
@@ -436,7 +445,7 @@ footer {
   font-size: 18px;
 }
 .search-controls button:disabled {
-  opacity: .35;
+  opacity: 0.35;
   cursor: default;
 }
 .info-button {
@@ -706,7 +715,9 @@ footer {
   animation: attachment-spin 900ms linear infinite;
 }
 @keyframes attachment-spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 .message time {
   text-align: right;
@@ -939,6 +950,335 @@ footer {
 .message-caption {
   margin-top: 6px;
 }
+.music-message {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: min(280px, 62vw);
+  padding: 4px 0;
+}
+.music-message.is-playing {
+  color: #285e49;
+}
+.music-message.is-playing > img {
+  animation: music-cover-pulse 1.8s ease-in-out infinite;
+  box-shadow: 0 0 0 3px #3971542b;
+}
+.music-message > img,
+.music-selection-heading img,
+.music-results img {
+  width: 48px;
+  height: 48px;
+  flex: 0 0 48px;
+  border-radius: 5px;
+  object-fit: cover;
+}
+.music-message-info,
+.music-selection-heading span,
+.music-results span {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+.music-message-info strong,
+.music-results strong,
+.music-selection-heading strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.music-message-info span,
+.music-message-info small,
+.music-results small,
+.music-selection-heading small {
+  overflow: hidden;
+  color: #66806b;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+}
+.music-play,
+.music-button {
+  display: grid;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 5px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: #2f7d4a;
+  color: #fff;
+}
+.music-equalizer {
+  display: flex;
+  width: 15px;
+  height: 15px;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 2px;
+}
+.music-equalizer i {
+  display: block;
+  width: 3px;
+  height: 7px;
+  border-radius: 3px;
+  background: currentColor;
+  animation: music-bars 0.8s ease-in-out infinite alternate;
+}
+.music-equalizer i:nth-child(2) {
+  height: 13px;
+  animation-delay: -0.35s;
+}
+.music-equalizer i:nth-child(3) {
+  height: 9px;
+  animation-delay: -0.6s;
+}
+@keyframes music-bars {
+  from {
+    transform: scaleY(0.45);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+@keyframes music-cover-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.035);
+  }
+}
+.music-button {
+  background: transparent;
+  color: #397154;
+  font-size: 22px;
+}
+.music-button.active {
+  background: #dcf5c8;
+}
+.music-picker {
+  position: relative;
+  width: min(620px, calc(100% - 32px));
+  margin: 0 auto 16px;
+  padding: 18px 20px 20px;
+  border: 1px solid #d6e4d4;
+  border-radius: 22px;
+  background:
+    radial-gradient(circle at 100% 0, #e5f6df 0, transparent 38%),
+    linear-gradient(145deg, #ffffff 0%, #f5faf3 100%);
+  box-shadow:
+    0 14px 30px #183b3117,
+    inset 0 1px 0 #ffffffcc;
+}
+.music-picker-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  left: auto;
+  display: grid;
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  min-height: 34px !important;
+  flex: 0 0 34px;
+  aspect-ratio: 1;
+  padding: 0;
+  place-items: center;
+  border: 1px solid #d5e2d3;
+  border-radius: 50%;
+  background: #ffffffaa;
+  color: #59715d;
+  font-size: 22px;
+  line-height: 1;
+}
+.music-picker-close:hover {
+  background: #eaf5e7;
+  color: #285e49;
+}
+.music-search {
+  display: flex;
+  gap: 7px;
+}
+.music-search input {
+  min-height: 42px;
+  padding-right: 14px;
+  padding-left: 14px;
+  border-radius: 13px;
+  border-color: #d1dfcf;
+  background: #ffffffcc;
+}
+.music-search input {
+  min-width: 0;
+  flex: 1;
+}
+.music-search button,
+.music-connect button,
+.music-selection-heading button {
+  min-height: 42px;
+  padding: 6px 14px;
+  border-radius: 13px;
+}
+.music-results {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+}
+.music-results button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 5px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  text-align: left;
+}
+.music-results button:hover {
+  background: #edf5e8;
+}
+.music-selection {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid #dce8da;
+}
+.music-selection-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.music-duration-select {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #59715d;
+  font-size: 12px;
+  font-weight: 600;
+}
+.music-duration-control {
+  position: relative;
+}
+.music-duration-trigger {
+  display: flex;
+  min-width: 128px;
+  min-height: 40px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 12px;
+  border: 1px solid #cbd8ca;
+  border-radius: 13px;
+  outline: 0;
+  background: #edf5e8;
+  color: #285e49;
+  font-size: 12px;
+  text-align: center;
+}
+.music-duration-trigger:focus-visible,
+.music-duration-trigger[aria-expanded="true"] {
+  border-color: #397154;
+  box-shadow: 0 0 0 3px #39715422;
+}
+.music-duration-trigger > span {
+  font-size: 18px;
+  line-height: 0.7;
+}
+.music-duration-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 10;
+  display: grid;
+  min-width: 100%;
+  padding: 6px;
+  border: 1px solid #cbd8ca;
+  border-radius: 14px;
+  background: #ffffff;
+  box-shadow: 0 12px 24px #183b3126;
+}
+.music-duration-menu button {
+  min-height: 36px;
+  padding: 7px 12px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: #397154;
+  font-size: 12px;
+  text-align: left;
+  white-space: nowrap;
+}
+.music-duration-menu button:hover,
+.music-duration-menu button.selected {
+  background: #e7f3e3;
+  color: #285e49;
+  font-weight: 700;
+}
+.music-duration-menu button:disabled {
+  color: #aab9aa;
+  cursor: not-allowed;
+}
+.music-range-labels {
+  display: flex;
+  justify-content: space-between;
+  color: #59715d;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.music-range {
+  position: relative;
+  height: 58px;
+  margin: 0;
+  touch-action: none;
+}
+.music-range::before {
+  position: absolute;
+  top: 25px;
+  right: 0;
+  left: 0;
+  height: 8px;
+  border-radius: 8px;
+  content: "";
+  background: #d9e0d4;
+  box-shadow: inset 0 1px 2px #183b3112;
+}
+.music-range-fill {
+  position: absolute;
+  top: 10px;
+  left: var(--range-start);
+  width: calc(var(--range-end) - var(--range-start));
+  height: 38px;
+  border: 0;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #63af77 0%, #397154 100%);
+  box-shadow:
+    0 5px 10px #39715433,
+    inset 0 1px 0 #ffffff55;
+  cursor: grab;
+  touch-action: none;
+}
+.music-range-fill:active {
+  cursor: grabbing;
+  box-shadow:
+    0 7px 14px #39715444,
+    inset 0 1px 0 #ffffff55;
+}
+.music-selection input[type="range"] {
+  width: 100%;
+}
+.music-picker p,
+.music-selection > small {
+  margin: 4px 0;
+  color: #66806b;
+  font-size: 11px;
+}
 .media-opened {
   display: inline-flex;
   align-items: center;
@@ -947,7 +1287,7 @@ footer {
   color: #6d7e70;
   font-size: 16px;
   font-weight: 500;
-  opacity: .72;
+  opacity: 0.72;
 }
 .media-opened-icon {
   display: inline-block;
@@ -1172,8 +1512,16 @@ footer p {
       radial-gradient(#ffffff55 0.45px, transparent 0.45px),
       radial-gradient(circle at 12% 18%, #e1d5c533 0, transparent 34%),
       radial-gradient(circle at 86% 78%, #f7f2e955 0, transparent 38%);
-    background-position: 0 0, 7px 11px, 0 0, 0 0;
-    background-size: 17px 17px, 23px 23px, 100% 100%, 100% 100%;
+    background-position:
+      0 0,
+      7px 11px,
+      0 0,
+      0 0;
+    background-size:
+      17px 17px,
+      23px 23px,
+      100% 100%,
+      100% 100%;
   }
 
   .chat-shell > header {
@@ -1235,8 +1583,16 @@ footer p {
       radial-gradient(#ffffff55 0.45px, transparent 0.45px),
       radial-gradient(circle at 12% 18%, #e1d5c533 0, transparent 34%),
       radial-gradient(circle at 86% 78%, #f7f2e955 0, transparent 38%);
-    background-position: 0 0, 7px 11px, 0 0, 0 0;
-    background-size: 17px 17px, 23px 23px, 100% 100%, 100% 100%;
+    background-position:
+      0 0,
+      7px 11px,
+      0 0,
+      0 0;
+    background-size:
+      17px 17px,
+      23px 23px,
+      100% 100%,
+      100% 100%;
   }
 
   .message {
@@ -1397,8 +1753,16 @@ footer p {
       radial-gradient(#ffffff55 0.4px, transparent 0.4px),
       radial-gradient(circle at 12% 18%, #e1d5c533 0, transparent 34%),
       radial-gradient(circle at 86% 78%, #f7f2e955 0, transparent 38%);
-    background-position: 0 0, 7px 11px, 0 0, 0 0;
-    background-size: 17px 17px, 23px 23px, 100% 100%, 100% 100%;
+    background-position:
+      0 0,
+      7px 11px,
+      0 0,
+      0 0;
+    background-size:
+      17px 17px,
+      23px 23px,
+      100% 100%,
+      100% 100%;
   }
 
   .chat-shell {
@@ -1417,8 +1781,16 @@ footer p {
       radial-gradient(#ffffff55 0.4px, transparent 0.4px),
       radial-gradient(circle at 12% 18%, #e1d5c533 0, transparent 34%),
       radial-gradient(circle at 86% 78%, #f7f2e955 0, transparent 38%);
-    background-position: 0 0, 7px 11px, 0 0, 0 0;
-    background-size: 17px 17px, 23px 23px, 100% 100%, 100% 100%;
+    background-position:
+      0 0,
+      7px 11px,
+      0 0,
+      0 0;
+    background-size:
+      17px 17px,
+      23px 23px,
+      100% 100%,
+      100% 100%;
     gap: 7px;
     padding-top: 22px;
     padding-bottom: 18px;
@@ -1492,7 +1864,7 @@ footer p {
   .composer {
     width: 100%;
     max-width: none;
-    margin: 8px 0 12px;
+    margin: 0 0 12px;
     padding: 6px 8px;
     gap: 5px;
     border-radius: 14px;
@@ -1515,6 +1887,61 @@ footer p {
     width: 46px;
     height: 46px;
     min-width: 46px;
+  }
+
+  .music-picker {
+    width: 100%;
+    margin: 0 auto;
+    padding: 18px 14px 8px;
+    border-radius: 20px;
+  }
+
+  .music-picker-close {
+    top: 8px;
+    right: 8px;
+    left: auto;
+  }
+
+  .music-search {
+    gap: 6px;
+  }
+
+  .music-search button {
+    min-width: 68px;
+    padding-right: 11px;
+    padding-left: 11px;
+  }
+
+  .music-results button {
+    min-height: 58px;
+    padding: 5px 3px;
+  }
+
+  .music-selection-heading button {
+    min-height: 38px;
+    padding-right: 11px;
+    padding-left: 11px;
+  }
+
+  .music-range {
+    height: 70px;
+    margin: 2px -2px;
+  }
+
+  .music-range::before {
+    top: 31px;
+    height: 9px;
+  }
+
+  .music-range-fill {
+    top: 12px;
+    height: 47px;
+    border-radius: 14px;
+  }
+
+  .music-duration-trigger {
+    min-width: 132px;
+    min-height: 44px;
   }
 
   .unread-pill {

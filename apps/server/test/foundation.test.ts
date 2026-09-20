@@ -61,7 +61,7 @@ test("SQLite persists data across restarts and migrations are idempotent", () =>
           count: number;
         }
       ).count,
-      6,
+      9,
     );
     assert.equal(db.pragma("journal_mode", { simple: true }), "wal");
     db.close();
@@ -121,7 +121,7 @@ test("readiness checks actual storage and private files are not served", async (
     ])
       assert.equal(
         (await app.inject(path)).statusCode,
-        path === "/api/v1/messages" ? 401 : 404,
+        path === "/media/test.jpg" || path === "/api/v1/messages" ? 401 : 404,
       );
     rmSync(join(dir, "staging"), { recursive: true });
     assert.equal((await app.inject("/health/ready")).statusCode, 503);

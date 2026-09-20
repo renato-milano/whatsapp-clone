@@ -1,9 +1,51 @@
-import { Fragment, StrictMode, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  Fragment,
+  StrictMode,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import { createRoot } from "react-dom/client";
 import { io, type Socket } from "socket.io-client";
 import { type ClientEvents, type ServerEvents } from "@private-chat/contracts";
 import type { ChatMessage } from "@private-chat/contracts";
 import "./style.css";
+
+type SpotifyTrack = {
+  trackId: string;
+  trackUri: string;
+  title: string;
+  artist: string;
+  album: string;
+  imageUrl?: string;
+  spotifyUrl: string;
+  durationMs?: number;
+};
+const MUSIC_DEFAULT_CLIP_MS = 15_000;
+const MUSIC_CLIP_OPTIONS_MS = [5_000, 10_000, 15_000, 30_000, 45_000, 60_000];
+type MusicDragMode = "window";
+type SpotifyPlayer = {
+  connect: () => Promise<boolean>;
+  disconnect: () => void;
+  addListener: (event: string, callback: (payload: any) => void) => void;
+  pause: () => Promise<void>;
+};
+declare global {
+  interface Window {
+    Spotify?: {
+      Player: new (options: {
+        name: string;
+        volume: number;
+        getOAuthToken: (callback: (token: string) => void) => void;
+      }) => SpotifyPlayer;
+    };
+    onSpotifyWebPlaybackSDKReady?: () => void;
+  }
+}
 
 type Member = { id: string; displayName: string; role: "owner" | "member" };
 type Conversation = {
@@ -24,11 +66,13 @@ function dateLabel(value: string) {
   yesterday.setDate(today.getDate() - 1);
   if (dateKey(value) === dateKey(today.toISOString())) return "Oggi";
   if (dateKey(value) === dateKey(yesterday.toISOString())) return "Ieri";
-  return date.toLocaleDateString("it-IT", {
-    weekday: "short",
-    day: "numeric",
-    month: "short",
-  }).replace(/\./g, "");
+  return date
+    .toLocaleDateString("it-IT", {
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+    })
+    .replace(/\./g, "");
 }
 function highlightSearch(text: string, query: string) {
   const value = query.trim();
@@ -47,7 +91,11 @@ function renderMessageBody(text: string, query: string): ReactNode {
   const parts = text.split(/((?:https?:\/\/|www\.)[^\s<]+)/gi);
   return parts.map((part, index) => {
     if (!/^(?:https?:\/\/|www\.)/i.test(part))
-      return <Fragment key={`${part}-${index}`}>{highlightSearch(part, query)}</Fragment>;
+      return (
+        <Fragment key={`${part}-${index}`}>
+          {highlightSearch(part, query)}
+        </Fragment>
+      );
 
     const trailing = part.match(/[.,!?;:]+$/)?.[0] ?? "";
     const url = trailing ? part.slice(0, -trailing.length) : part;
@@ -378,7 +426,9 @@ function Chat({
   const [attachmentPreview, setAttachmentPreview] = useState<string>();
   const [pendingFile, setPendingFile] = useState<File>();
   const [viewOnce, setViewOnce] = useState(false);
-  const [consumedMedia, setConsumedMedia] = useState<Set<string>>(() => new Set());
+  const [consumedMedia, setConsumedMedia] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [recording, setRecording] = useState(false);
   const [inputFocused, setInputFocused] = useState(false);
   const [fullscreenImage, setFullscreenImage] = useState<string>();
@@ -387,7 +437,9 @@ function Chat({
   const [showSearch, setShowSearch] = useState(false);
   const [searchTotal, setSearchTotal] = useState(0);
   const [searchIndex, setSearchIndex] = useState(0);
-  const [searchMatches, setSearchMatches] = useState<Array<{ id: string; createdAt: string }>>([]);
+  const [searchMatches, setSearchMatches] = useState<
+    Array<{ id: string; createdAt: string }>
+  >([]);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [highlightMessage, setHighlightMessage] = useState<string>();
   const [showInvite, setShowInvite] = useState(false);
@@ -403,6 +455,28 @@ function Chat({
   const [reactions, setReactions] = useState<
     Record<string, { emoji: string; count: number; names: string[] }>
   >({});
+  const [spotifyConfigured, setSpotifyConfigured] = useState(false);
+  const [spotifyConnected, setSpotifyConnected] = useState(false);
+  const [spotifyCanConnect, setSpotifyCanConnect] = useState(false);
+  const [showMusicPicker, setShowMusicPicker] = useState(false);
+  const [musicQuery, setMusicQuery] = useState("");
+  const [musicResults, setMusicResults] = useState<SpotifyTrack[]>([]);
+  const [selectedMusic, setSelectedMusic] = useState<SpotifyTrack>();
+  const [musicStartMs, setMusicStartMs] = useState(0);
+  const [musicEndMs, setMusicEndMs] = useState(MUSIC_DEFAULT_CLIP_MS);
+  const [musicDurationMenuOpen, setMusicDurationMenuOpen] = useState(false);
+  const [musicDurationMs, setMusicDurationMs] = useState(180_000);
+  const [musicPlayerReady, setMusicPlayerReady] = useState(false);
+  const [playingMusicMessageId, setPlayingMusicMessageId] = useState<string>();
+  const spotifyPlayerRef = useRef<SpotifyPlayer | null>(null);
+  const spotifyDeviceIdRef = useRef<string | undefined>(undefined);
+  const musicStopAtRef = useRef<number | undefined>(undefined);
+  const musicLoopRef = useRef<
+    { track: SpotifyTrack; startMs: number; endMs: number } | undefined
+  >(undefined);
+  const musicLoopTimerRef = useRef<number | undefined>(undefined);
+  const musicDragRef = useRef<MusicDragMode | undefined>(undefined);
+  const musicRangeRef = useRef<HTMLDivElement | null>(null);
   const messagesRef = useRef<HTMLElement | null>(null);
   const atBottomRef = useRef(true);
   const messageRefs = useRef<Record<string, HTMLElement | null>>({});
@@ -413,19 +487,108 @@ function Chat({
   const longPressTimer = useRef<number | undefined>(undefined);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const recordingChunks = useRef<Blob[]>([]);
-  const pendingScrollRestore = useRef<{ top: number; height: number } | undefined>(undefined);
+  const pendingScrollRestore = useRef<
+    { top: number; height: number } | undefined
+  >(undefined);
   const pendingSearchTarget = useRef<string | undefined>(undefined);
   const reconnectNoticeTimer = useRef<number | undefined>(undefined);
   const copyNoticeTimer = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    let disposed = false;
+    void api<{ configured: boolean; connected: boolean; canConnect: boolean }>(
+      "/api/v1/spotify/status",
+    )
+      .then((status) => {
+        if (disposed) return;
+        setSpotifyConfigured(status.configured);
+        setSpotifyConnected(status.connected);
+        setSpotifyCanConnect(status.canConnect);
+        if (!status.connected || !status.configured) return;
+        const initialize = () => {
+          if (disposed || !window.Spotify || spotifyPlayerRef.current) return;
+          const player = new window.Spotify.Player({
+            name: "Chat privata",
+            volume: 0.7,
+            getOAuthToken: (callback) => {
+              void api<{ accessToken: string }>("/api/v1/spotify/token")
+                .then((result) => callback(result.accessToken))
+                .catch(() => undefined);
+            },
+          });
+          player.addListener("ready", (payload) => {
+            spotifyDeviceIdRef.current = payload.device_id;
+            setMusicPlayerReady(true);
+          });
+          player.addListener("not_ready", () => setMusicPlayerReady(false));
+          player.addListener("player_state_changed", (payload) => {
+            const position = payload?.position ?? 0;
+            if (musicLoopTimerRef.current !== undefined)
+              window.clearTimeout(musicLoopTimerRef.current);
+            musicLoopTimerRef.current = undefined;
+            const endMs = musicStopAtRef.current;
+            if (endMs === undefined || payload?.paused !== false) return;
+            const restart = () => {
+              const activeLoop = musicLoopRef.current;
+              musicStopAtRef.current = undefined;
+              if (!activeLoop) {
+                setPlayingMusicMessageId(undefined);
+                void player.pause();
+                return;
+              }
+              void player
+                .pause()
+                .catch(() => undefined)
+                .finally(() => {
+                  if (musicLoopRef.current === activeLoop)
+                    void playMusic(
+                      activeLoop.track,
+                      activeLoop.startMs,
+                      activeLoop.endMs,
+                    );
+                });
+            };
+            const remainingMs = endMs - position;
+            if (remainingMs <= 100) restart();
+            else
+              musicLoopTimerRef.current = window.setTimeout(
+                restart,
+                remainingMs - 50,
+              );
+          });
+          spotifyPlayerRef.current = player;
+          void player.connect();
+        };
+        if (window.Spotify) initialize();
+        else {
+          window.onSpotifyWebPlaybackSDKReady = initialize;
+          const script = document.createElement("script");
+          script.src = "https://sdk.scdn.co/spotify-player.js";
+          script.async = true;
+          script.dataset.spotifySdk = "true";
+          document.body.appendChild(script);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+      spotifyPlayerRef.current?.disconnect();
+      spotifyPlayerRef.current = null;
+      window.onSpotifyWebPlaybackSDKReady = undefined;
+    };
+  }, []);
   useLayoutEffect(() => {
     const searchTarget = pendingSearchTarget.current;
     if (searchTarget) {
       const targetElement = messageRefs.current[searchTarget];
       if (targetElement) {
         const centerTarget = () =>
-          messageRefs.current[searchTarget]?.scrollIntoView({ behavior: "auto", block: "center" });
+          messageRefs.current[searchTarget]?.scrollIntoView({
+            behavior: "auto",
+            block: "center",
+          });
         centerTarget();
-        for (const delay of [40, 120, 300, 700]) window.setTimeout(centerTarget, delay);
+        for (const delay of [40, 120, 300, 700])
+          window.setTimeout(centerTarget, delay);
         pendingSearchTarget.current = undefined;
         return;
       }
@@ -434,7 +597,8 @@ function Chat({
     const container = messagesRef.current;
     if (!pending || !container || loadingOlder) return;
     const restore = () => {
-      container.scrollTop = pending.top + (container.scrollHeight - pending.height);
+      container.scrollTop =
+        pending.top + (container.scrollHeight - pending.height);
     };
     restore();
     // Media elements can change the height after the React commit.
@@ -488,23 +652,25 @@ function Chat({
       setError("");
       // A deploy replaces the Socket.IO process. Refresh the current window
       // after reconnect so messages missed during the rollout are recovered.
-      void api<{ messages: ChatMessage[] }>("/api/v1/messages").then((result) => {
-        setMessages(result.messages);
-        setReactions(
-          Object.fromEntries(
-            result.messages
-              .filter((message) => message.reaction)
-              .map((message) => [
-                message.id,
-                {
-                  emoji: message.reaction!.emoji,
-                  count: message.reaction!.count,
-                  names: message.reaction!.names ?? [],
-                },
-              ]),
-          ),
-        );
-      }).catch(() => undefined);
+      void api<{ messages: ChatMessage[] }>("/api/v1/messages")
+        .then((result) => {
+          setMessages(result.messages);
+          setReactions(
+            Object.fromEntries(
+              result.messages
+                .filter((message) => message.reaction)
+                .map((message) => [
+                  message.id,
+                  {
+                    emoji: message.reaction!.emoji,
+                    count: message.reaction!.count,
+                    names: message.reaction!.names ?? [],
+                  },
+                ]),
+            ),
+          );
+        })
+        .catch(() => undefined);
     });
     socket.on("disconnect", (reason) => {
       if (reason !== "io client disconnect") {
@@ -529,7 +695,11 @@ function Chat({
                 ? (() => {
                     if (item.attachment?.localUrl)
                       URL.revokeObjectURL(item.attachment.localUrl);
-                    return { ...item, ...message, replyTo: message.replyTo ?? item.replyTo };
+                    return {
+                      ...item,
+                      ...message,
+                      replyTo: message.replyTo ?? item.replyTo,
+                    };
                   })()
                 : item,
             )
@@ -608,14 +778,18 @@ function Chat({
       setSearchMatches([]);
       setSearchTotal(0);
       if (showSearch)
-        void api<{ messages: ChatMessage[] }>("/api/v1/messages").then((result) => setMessages(result.messages));
+        void api<{ messages: ChatMessage[] }>("/api/v1/messages").then(
+          (result) => setMessages(result.messages),
+        );
       return;
     }
     setSearchIndex(0);
     const timer = window.setTimeout(() => {
-      void api<{ messages: ChatMessage[]; total?: number; matches?: Array<{ id: string; createdAt: string }> }>(
-        `/api/v1/messages?q=${encodeURIComponent(search)}`,
-      ).then((result) => {
+      void api<{
+        messages: ChatMessage[];
+        total?: number;
+        matches?: Array<{ id: string; createdAt: string }>;
+      }>(`/api/v1/messages?q=${encodeURIComponent(search)}`).then((result) => {
         atBottomRef.current = false;
         setMessages(result.messages);
         setSearchMatches(result.matches ?? []);
@@ -629,18 +803,154 @@ function Chat({
     }, 250);
     return () => window.clearTimeout(timer);
   }, [search, showSearch]);
+  async function searchSpotify(event?: React.FormEvent) {
+    event?.preventDefault();
+    const query = musicQuery.trim();
+    if (!query) return setMusicResults([]);
+    try {
+      const result = await api<{ tracks: SpotifyTrack[] }>(
+        `/api/v1/spotify/search?q=${encodeURIComponent(query)}`,
+      );
+      setMusicResults(result.tracks);
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "Ricerca Spotify non riuscita.",
+      );
+    }
+  }
+  useEffect(() => {
+    const query = musicQuery.trim();
+    if (query.length < 3) {
+      setMusicResults([]);
+      return;
+    }
+    const timer = window.setTimeout(() => void searchSpotify(), 280);
+    return () => window.clearTimeout(timer);
+  }, [musicQuery]);
+  async function playMusic(
+    track: SpotifyTrack,
+    startMs = 0,
+    endMs?: number,
+    loop = true,
+  ) {
+    const deviceId = spotifyDeviceIdRef.current;
+    if (!deviceId || !musicPlayerReady) {
+      return;
+    }
+    try {
+      await api("/api/v1/spotify/play", {
+        method: "PUT",
+        body: JSON.stringify({
+          deviceId,
+          trackUri: track.trackUri,
+          positionMs: startMs,
+        }),
+      });
+      musicStopAtRef.current = endMs;
+      musicLoopRef.current =
+        endMs !== undefined && loop ? { track, startMs, endMs } : undefined;
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "Riproduzione Spotify non riuscita.",
+      );
+    }
+  }
+  function stopMusicPlayback() {
+    setPlayingMusicMessageId(undefined);
+    musicStopAtRef.current = undefined;
+    musicLoopRef.current = undefined;
+    if (musicLoopTimerRef.current !== undefined)
+      window.clearTimeout(musicLoopTimerRef.current);
+    musicLoopTimerRef.current = undefined;
+    void spotifyPlayerRef.current?.pause();
+  }
+  function chooseMusic(track: SpotifyTrack) {
+    setPlayingMusicMessageId(undefined);
+    setSelectedMusic(track);
+    const trackDuration = track.durationMs ?? 180_000;
+    setMusicDurationMs(trackDuration);
+    setMusicStartMs(0);
+    const clipLength = Math.min(MUSIC_DEFAULT_CLIP_MS, trackDuration);
+    setMusicEndMs(clipLength);
+    void playMusic(track, 0, clipLength);
+  }
+  function changeMusicClipLength(value: number) {
+    if (!selectedMusic) return;
+    setPlayingMusicMessageId(undefined);
+    const clipLength = Math.min(value, musicDurationMs);
+    const nextStart = Math.min(musicStartMs, musicDurationMs - clipLength);
+    const nextEnd = nextStart + clipLength;
+    stopMusicPlayback();
+    setMusicStartMs(nextStart);
+    setMusicEndMs(nextEnd);
+    void playMusic(selectedMusic, nextStart, nextEnd);
+  }
+  function musicValueFromPointer(clientX: number) {
+    const range = musicRangeRef.current;
+    if (!range) return 0;
+    const bounds = range.getBoundingClientRect();
+    return Math.max(
+      0,
+      Math.min(
+        musicDurationMs,
+        Math.round(
+          (((clientX - bounds.left) / bounds.width) * musicDurationMs) / 1000,
+        ) * 1000,
+      ),
+    );
+  }
+  function updateMusicDrag(clientX: number) {
+    const mode = musicDragRef.current;
+    if (!mode) return;
+    const value = musicValueFromPointer(clientX);
+    const duration = musicEndMs - musicStartMs;
+    const nextStart = Math.max(
+      0,
+      Math.min(musicDurationMs - duration, value - duration / 2),
+    );
+    setMusicStartMs(Math.round(nextStart / 1000) * 1000);
+    setMusicEndMs(Math.round((nextStart + duration) / 1000) * 1000);
+  }
+  function beginMusicDrag(mode: MusicDragMode, event: React.PointerEvent) {
+    event.preventDefault();
+    event.stopPropagation();
+    musicDragRef.current = mode;
+    musicStopAtRef.current = undefined;
+    musicLoopRef.current = undefined;
+    if (musicLoopTimerRef.current !== undefined)
+      window.clearTimeout(musicLoopTimerRef.current);
+    musicLoopTimerRef.current = undefined;
+    void spotifyPlayerRef.current?.pause();
+    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+  }
+  function finishMusicDrag() {
+    if (!musicDragRef.current) return;
+    musicDragRef.current = undefined;
+    setPlayingMusicMessageId(undefined);
+    if (selectedMusic) void playMusic(selectedMusic, musicStartMs, musicEndMs);
+  }
+  function formatMusicTime(value: number) {
+    const seconds = Math.floor(value / 1000);
+    return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+  }
   useEffect(() => {
     const closeMenu = (event: PointerEvent) => {
       const target = event.target as HTMLElement;
       if (!target.closest(".message-menu")) setMenuMessage(undefined);
       if (!target.closest(".emoji-picker") && !target.closest(".emoji-button"))
         setShowEmoji(false);
+      if (!target.closest(".music-duration-control"))
+        setMusicDurationMenuOpen(false);
     };
     document.addEventListener("pointerdown", closeMenu);
     return () => document.removeEventListener("pointerdown", closeMenu);
   }, []);
-  async function send(event: React.FormEvent) {
-    event.preventDefault();
+  async function send(event?: React.FormEvent) {
+    event?.preventDefault();
     const text = body.trim();
     if (pendingFile) {
       const file = pendingFile;
@@ -695,21 +1005,26 @@ function Chat({
         );
       } catch (caught) {
         if (localUrl) URL.revokeObjectURL(localUrl);
-        setError(caught instanceof Error ? caught.message : "Upload non riuscito");
-        setMessages((current) => current.map((item) =>
-          item.id === messageId
-            ? { ...item, deliveryStatus: "failed" as const }
-            : item,
-        ));
+        setError(
+          caught instanceof Error ? caught.message : "Upload non riuscito",
+        );
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === messageId
+              ? { ...item, deliveryStatus: "failed" as const }
+              : item,
+          ),
+        );
       }
       return;
     }
-    if (!text || !socketRef.current) return;
+    if ((!text && !selectedMusic) || !socketRef.current) return;
     if (!socketRef.current.connected) {
       setError("Connessione in ripristino, riprova tra un momento.");
       return;
     }
     setShowEmoji(false);
+    stopMusicPlayback();
     window.clearTimeout(typingTimer.current);
     socketRef.current.emit("chat.typing", { isTyping: false });
     if (editingMessage) {
@@ -727,9 +1042,16 @@ function Chat({
       return;
     }
     setSendingBody(text);
+    const music = selectedMusic
+      ? {
+          ...selectedMusic,
+          startMs: musicStartMs,
+          endMs: musicEndMs,
+        }
+      : undefined;
     socketRef.current.emit(
       "chat.message.send",
-      { body: text, replyToId: replyTo?.id },
+      { body: text, replyToId: replyTo?.id, music },
       (result) => {
         if (result.error) {
           setError(result.error);
@@ -738,6 +1060,8 @@ function Chat({
           setBody("");
           setReplyTo(undefined);
           setSendingBody(undefined);
+          setSelectedMusic(undefined);
+          setShowMusicPicker(false);
           window.setTimeout(() => {
             if (atBottomRef.current && messagesRef.current)
               messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
@@ -751,7 +1075,10 @@ function Chat({
       await navigator.clipboard.writeText(message.body);
       setCopyNotice("Messaggio copiato");
       window.clearTimeout(copyNoticeTimer.current);
-      copyNoticeTimer.current = window.setTimeout(() => setCopyNotice(""), 1800);
+      copyNoticeTimer.current = window.setTimeout(
+        () => setCopyNotice(""),
+        1800,
+      );
     } catch {
       setError("Non è stato possibile copiare il messaggio.");
     }
@@ -762,8 +1089,13 @@ function Chat({
       recorderRef.current?.stop();
       return;
     }
-    if (!window.isSecureContext && !["localhost", "127.0.0.1"].includes(window.location.hostname)) {
-      setError("Per registrare audio è necessario aprire la chat tramite HTTPS. Su iPhone gli indirizzi HTTP della rete locale non possono usare il microfono.");
+    if (
+      !window.isSecureContext &&
+      !["localhost", "127.0.0.1"].includes(window.location.hostname)
+    ) {
+      setError(
+        "Per registrare audio è necessario aprire la chat tramite HTTPS. Su iPhone gli indirizzi HTTP della rete locale non possono usare il microfono.",
+      );
       return;
     }
     if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
@@ -777,7 +1109,10 @@ function Chat({
         : MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
           ? "audio/webm;codecs=opus"
           : "";
-      const recorder = new MediaRecorder(stream, preferred ? { mimeType: preferred } : undefined);
+      const recorder = new MediaRecorder(
+        stream,
+        preferred ? { mimeType: preferred } : undefined,
+      );
       recordingChunks.current = [];
       recorderRef.current = recorder;
       recorder.ondataavailable = (event) => {
@@ -785,12 +1120,22 @@ function Chat({
       };
       recorder.onstop = async () => {
         stream.getTracks().forEach((track) => track.stop());
-        const blob = new Blob(recordingChunks.current, { type: recorder.mimeType || "audio/mp4" });
+        const blob = new Blob(recordingChunks.current, {
+          type: recorder.mimeType || "audio/mp4",
+        });
         const extension = blob.type.includes("webm") ? "webm" : "m4a";
-        const file = new File([blob], `messaggio-vocale-${Date.now()}.${extension}`, { type: blob.type || "audio/mp4" });
+        const file = new File(
+          [blob],
+          `messaggio-vocale-${Date.now()}.${extension}`,
+          { type: blob.type || "audio/mp4" },
+        );
         const form = new FormData();
         form.append("file", file);
-        const response = await fetch("/api/v1/messages/attachment", { method: "POST", body: form, credentials: "include" });
+        const response = await fetch("/api/v1/messages/attachment", {
+          method: "POST",
+          body: form,
+          credentials: "include",
+        });
         if (!response.ok) setError("Invio del messaggio vocale non riuscito.");
         setRecording(false);
         recorderRef.current = null;
@@ -810,7 +1155,10 @@ function Chat({
           aria-label="Cerca messaggi"
           onClick={() => setShowSearch((open) => !open)}
         >
-          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.2"/><path d="m16 16 5 5"/></svg>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="10.8" cy="10.8" r="6.2" />
+            <path d="m16 16 5 5" />
+          </svg>
         </button>
         <span className="label">{conversation.member.displayName}</span>
         {inviteLink && (
@@ -832,7 +1180,10 @@ function Chat({
         </button>
       </header>
       {showSearch && (
-        <div className="search-bar" onPointerDown={(event) => event.stopPropagation()}>
+        <div
+          className="search-bar"
+          onPointerDown={(event) => event.stopPropagation()}
+        >
           <button
             type="button"
             className="search-close"
@@ -840,9 +1191,13 @@ function Chat({
             onClick={() => {
               setShowSearch(false);
               setSearch("");
-              void api<{ messages: ChatMessage[] }>("/api/v1/messages").then((result) => setMessages(result.messages));
+              void api<{ messages: ChatMessage[] }>("/api/v1/messages").then(
+                (result) => setMessages(result.messages),
+              );
             }}
-          >×</button>
+          >
+            ×
+          </button>
           <input
             autoFocus
             className="search-input"
@@ -852,23 +1207,37 @@ function Chat({
           />
           {search.trim() && (
             <div className="search-controls">
-              <span>{searchMatches.length ? `${searchIndex + 1} di ${searchTotal}` : `0 di ${searchTotal}`}</span>
+              <span>
+                {searchMatches.length
+                  ? `${searchIndex + 1} di ${searchTotal}`
+                  : `0 di ${searchTotal}`}
+              </span>
               <button
                 type="button"
                 aria-label="Messaggi meno recenti"
-                disabled={!searchMatches.length || searchIndex >= searchMatches.length - 1}
+                disabled={
+                  !searchMatches.length ||
+                  searchIndex >= searchMatches.length - 1
+                }
                 onClick={async () => {
-                  const next = Math.min(searchMatches.length - 1, searchIndex + 1);
+                  const next = Math.min(
+                    searchMatches.length - 1,
+                    searchIndex + 1,
+                  );
                   setSearchIndex(next);
                   const target = searchMatches[next];
                   if (!target) return;
-                  const result = await api<{ messages: ChatMessage[] }>(`/api/v1/messages?around=${target.id}`);
+                  const result = await api<{ messages: ChatMessage[] }>(
+                    `/api/v1/messages?around=${target.id}`,
+                  );
                   atBottomRef.current = false;
                   pendingSearchTarget.current = target.id;
                   setMessages(result.messages);
                   setHighlightMessage(target.id);
                 }}
-                >↑</button>
+              >
+                ↑
+              </button>
               <button
                 type="button"
                 aria-label="Messaggi più recenti"
@@ -878,13 +1247,17 @@ function Chat({
                   setSearchIndex(next);
                   const target = searchMatches[next];
                   if (!target) return;
-                  const result = await api<{ messages: ChatMessage[] }>(`/api/v1/messages?around=${target.id}`);
+                  const result = await api<{ messages: ChatMessage[] }>(
+                    `/api/v1/messages?around=${target.id}`,
+                  );
                   atBottomRef.current = false;
                   pendingSearchTarget.current = target.id;
                   setMessages(result.messages);
                   setHighlightMessage(target.id);
                 }}
-              >↓</button>
+              >
+                ↓
+              </button>
             </div>
           )}
         </div>
@@ -918,7 +1291,10 @@ function Chat({
             const item = messageRefs.current[message.id];
             if (!item) return false;
             const rect = item.getBoundingClientRect();
-            return rect.bottom >= containerRect.top + 18 && rect.top <= containerRect.bottom;
+            return (
+              rect.bottom >= containerRect.top + 18 &&
+              rect.top <= containerRect.bottom
+            );
           });
           if (visible) setScrollDate(visible.createdAt);
           atBottomRef.current =
@@ -929,18 +1305,25 @@ function Chat({
           // Prefetch before the user reaches the oldest loaded message. The
           // threshold is roughly 10–15 message bubbles on mobile and desktop.
           const prefetchDistance = Math.max(720, element.clientHeight * 1.25);
-          const loadingOlderMessages = element.scrollTop < prefetchDistance && !search;
-          const loadingSearchOlder = element.scrollTop < prefetchDistance && !!search;
+          const loadingOlderMessages =
+            element.scrollTop < prefetchDistance && !search;
+          const loadingSearchOlder =
+            element.scrollTop < prefetchDistance && !!search;
           const loadingSearchNewer =
-            element.scrollHeight - element.scrollTop - element.clientHeight < prefetchDistance && !!search;
+            element.scrollHeight - element.scrollTop - element.clientHeight <
+              prefetchDistance && !!search;
           if (
-            (loadingOlderMessages || loadingSearchOlder || loadingSearchNewer) &&
+            (loadingOlderMessages ||
+              loadingSearchOlder ||
+              loadingSearchNewer) &&
             !loadingOlder &&
             messages.length &&
             messages[0]
           ) {
             setLoadingOlder(true);
-            const edge = loadingSearchNewer ? messages[messages.length - 1] : messages[0];
+            const edge = loadingSearchNewer
+              ? messages[messages.length - 1]
+              : messages[0];
             const previousScrollTop = element.scrollTop;
             const previousScrollHeight = element.scrollHeight;
             void api<{ messages: ChatMessage[] }>(
@@ -980,186 +1363,303 @@ function Chat({
         ) : (
           messages.map((message, index) => (
             <Fragment key={message.id}>
-            {(index === 0 || dateKey(message.createdAt) !== dateKey(messages[index - 1]!.createdAt)) && (
-              <div className="date-separator"><span>{dateLabel(message.createdAt)}</span></div>
-            )}
-            <article
-              className={
-                message.memberId === conversation.member.id
-                  ? `message mine${index > 0 && messages[index - 1]?.memberId === message.memberId ? " grouped" : ""}${highlightMessage === message.id ? " highlight" : ""}`
-                  : `message${index > 0 && messages[index - 1]?.memberId === message.memberId ? " grouped" : ""}${highlightMessage === message.id ? " highlight" : ""}`
-              }
-              ref={(element) => {
-                messageRefs.current[message.id] = element;
-              }}
-              onDoubleClick={() =>
-                socketRef.current?.emit(
-                  "chat.message.react",
-                  { messageId: message.id, emoji: "❤️" },
-                  () => undefined,
-                )
-              }
-              onContextMenu={(event) => {
-                event.preventDefault();
-                setMenuMessage(message);
-                setMenuPosition({
-                  x: Math.min(event.clientX, window.innerWidth - 230),
-                  y: Math.min(event.clientY, window.innerHeight - 80),
-                });
-              }}
-              onTouchStart={(event) => {
-                const rect = event.currentTarget.getBoundingClientRect();
-                window.clearTimeout(longPressTimer.current);
-                longPressTimer.current = window.setTimeout(() => {
-                  setMenuMessage(message);
-                  setMenuPosition({
-                    x: Math.min(rect.right - 20, window.innerWidth - 230),
-                    y: Math.max(12, rect.top - 52),
-                  });
-                }, 500);
-              }}
-              onTouchMove={() => window.clearTimeout(longPressTimer.current)}
-              onTouchEnd={() => window.clearTimeout(longPressTimer.current)}
-              onTouchCancel={() => window.clearTimeout(longPressTimer.current)}
-            >
-              {message.replyTo && (
-                <div
-                  className="reply-preview"
-                  onClick={() => {
-                    messageRefs.current[message.replyTo!.id]?.scrollIntoView({
-                      behavior: "smooth",
-                      block: "center",
-                    });
-                    setHighlightMessage(message.replyTo!.id);
-                    window.setTimeout(
-                      () => setHighlightMessage(undefined),
-                      900,
-                    );
-                  }}
-                >
-                  <strong>{message.replyTo.authorName}</strong>
-                  <br />
-                  {message.replyTo.body}
+              {(index === 0 ||
+                dateKey(message.createdAt) !==
+                  dateKey(messages[index - 1]!.createdAt)) && (
+                <div className="date-separator">
+                  <span>{dateLabel(message.createdAt)}</span>
                 </div>
               )}
-              {!index || messages[index - 1]?.memberId !== message.memberId ? (
-                <small>{message.authorName}</small>
-              ) : null}
-              <div className="message-content">
-                {message.deliveryStatus === "uploading" && message.attachment && (
-                  <div className="attachment-sending" aria-live="polite">
-                    {message.attachment.localUrl && message.attachment.mimeType.startsWith("image/") && (
-                      <img className="message-image" src={message.attachment.localUrl} alt={message.attachment.filename} />
-                    )}
-                    <span>Invio in corso…</span>
-                  </div>
-                )}
-                {message.deliveryStatus === "failed" && message.attachment && (
-                  <div className="attachment-failed" role="status">
-                    <span>Invio non riuscito: {message.attachment.filename}</span>
-                  </div>
-                )}
-                {!message.deliveryStatus && message.attachment?.viewOnce && message.memberId !== conversation.member.id && !message.attachment.consumedAt && !consumedMedia.has(message.attachment.id) && (
-                  <button
-                    type="button"
-                    className="view-once-button"
+              <article
+                className={
+                  message.memberId === conversation.member.id
+                    ? `message mine${index > 0 && messages[index - 1]?.memberId === message.memberId ? " grouped" : ""}${highlightMessage === message.id ? " highlight" : ""}`
+                    : `message${index > 0 && messages[index - 1]?.memberId === message.memberId ? " grouped" : ""}${highlightMessage === message.id ? " highlight" : ""}`
+                }
+                ref={(element) => {
+                  messageRefs.current[message.id] = element;
+                }}
+                onDoubleClick={() =>
+                  socketRef.current?.emit(
+                    "chat.message.react",
+                    { messageId: message.id, emoji: "❤️" },
+                    () => undefined,
+                  )
+                }
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  setMenuMessage(message);
+                  setMenuPosition({
+                    x: Math.min(event.clientX, window.innerWidth - 230),
+                    y: Math.min(event.clientY, window.innerHeight - 80),
+                  });
+                }}
+                onTouchStart={(event) => {
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  window.clearTimeout(longPressTimer.current);
+                  longPressTimer.current = window.setTimeout(() => {
+                    setMenuMessage(message);
+                    setMenuPosition({
+                      x: Math.min(rect.right - 20, window.innerWidth - 230),
+                      y: Math.max(12, rect.top - 52),
+                    });
+                  }, 500);
+                }}
+                onTouchMove={() => window.clearTimeout(longPressTimer.current)}
+                onTouchEnd={() => window.clearTimeout(longPressTimer.current)}
+                onTouchCancel={() =>
+                  window.clearTimeout(longPressTimer.current)
+                }
+              >
+                {message.replyTo && (
+                  <div
+                    className="reply-preview"
                     onClick={() => {
-                      setConsumedMedia((current) => new Set(current).add(message.attachment!.id));
-                      if (message.attachment!.mimeType.startsWith("video/"))
-                        setFullscreenVideo(`/media/${message.attachment!.id}`);
-                      else setFullscreenImage(`/media/${message.attachment!.id}`);
+                      messageRefs.current[message.replyTo!.id]?.scrollIntoView({
+                        behavior: "smooth",
+                        block: "center",
+                      });
+                      setHighlightMessage(message.replyTo!.id);
+                      window.setTimeout(
+                        () => setHighlightMessage(undefined),
+                        900,
+                      );
                     }}
                   >
-                    Apri {message.attachment.mimeType.startsWith("video/") ? "video" : "foto"}
-                  </button>
-                )}
-                {!message.deliveryStatus && message.attachment?.viewOnce && message.memberId !== conversation.member.id && (message.attachment.consumedAt || consumedMedia.has(message.attachment.id)) && (
-                  <span className="view-once-consumed">Media aperto</span>
-                )}
-                {!message.deliveryStatus && message.attachment?.viewOnce && message.memberId === conversation.member.id && (
-                  <span className="view-once-consumed">Media inviato</span>
-                )}
-                {!message.deliveryStatus && !message.attachment?.viewOnce && message.attachment?.mimeType.startsWith("image/") && (
-                  <img
-                    onLoad={() => {
-                      if (atBottomRef.current && messagesRef.current)
-                        messagesRef.current.scrollTop =
-                          messagesRef.current.scrollHeight;
-                    }}
-                    onClick={() =>
-                      setFullscreenImage(`/media/${message.attachment!.id}`)
-                    }
-                    className="message-image"
-                    src={message.attachment.localUrl ?? `/media/${message.attachment.id}`}
-                    alt={message.attachment.filename}
-                  />
-                )}
-                {!message.deliveryStatus && message.attachment?.mimeType.startsWith("audio/") && (
-                  <audio
-                    className="message-audio"
-                    controls
-                    preload="metadata"
-                    src={message.attachment.localUrl ?? `/media/${message.attachment.id}`}
-                    aria-label={`Riproduci audio ${message.attachment.filename}`}
-                  />
-                )}
-                {!message.deliveryStatus && !message.attachment?.viewOnce && message.attachment?.mimeType.startsWith("video/") && (
-                  <video
-                    className="message-video"
-                    controls
-                    preload="metadata"
-                    src={message.attachment.localUrl ?? `/media/${message.attachment.id}`}
-                    aria-label={`Riproduci video ${message.attachment.filename}`}
-                    onClick={() =>
-                      setFullscreenVideo(`/media/${message.attachment!.id}`)
-                    }
-                  />
-                )}
-                {!message.deliveryStatus && message.attachment &&
-                  !message.attachment.mimeType.startsWith("image/") &&
-                  !message.attachment.mimeType.startsWith("audio/") &&
-                  !message.attachment.mimeType.startsWith("video/") && (
-                    <a
-                      href={`/media/${message.attachment.id}`}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      📎 {message.attachment.filename}
-                    </a>
-                  )}
-                {/^(immagine|video) omess[ao]$/i.test(message.body.trim()) ? (
-                  <span className="media-opened">
-                    <span className="media-opened-icon" aria-hidden="true" />
-                    <span>Messaggio aperto</span>
-                  </span>
-                ) : message.body && (
-                  <div className="message-caption">
-                    {renderMessageBody(message.body, search)}
+                    <strong>{message.replyTo.authorName}</strong>
+                    <br />
+                    {message.replyTo.body}
                   </div>
                 )}
-                <time>
-                  {new Date(message.createdAt).toLocaleTimeString([], {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })}
-                  {message.memberId === conversation.member.id && (message.deliveryStatus === "uploading" ? (
-                    <span className="checks sending-check">◌</span>
-                  ) : message.deliveryStatus === "failed" ? (
-                    <span className="checks failed-check">!</span>
-                  ) : <span className="checks">✓✓</span>)}
-                  {message.editedAt && (
-                    <span className="edited-label">modificato</span>
+                {!index ||
+                messages[index - 1]?.memberId !== message.memberId ? (
+                  <small>{message.authorName}</small>
+                ) : null}
+                <div className="message-content">
+                  {message.music && (
+                    <div
+                      className={`music-message${
+                        playingMusicMessageId === message.id
+                          ? " is-playing"
+                          : ""
+                      }`}
+                    >
+                      {message.music.imageUrl && (
+                        <img src={message.music.imageUrl} alt="" />
+                      )}
+                      <div className="music-message-info">
+                        <strong>{message.music.title}</strong>
+                        <span>{message.music.artist}</span>
+                        <small>
+                          {formatMusicTime(message.music.startMs)} –{" "}
+                          {formatMusicTime(message.music.endMs)}
+                        </small>
+                      </div>
+                      <button
+                        type="button"
+                        className="music-play"
+                        aria-label={`${
+                          playingMusicMessageId === message.id
+                            ? "Ferma"
+                            : "Riproduci"
+                        } ${message.music.title}`}
+                        onClick={() => {
+                          if (playingMusicMessageId === message.id) {
+                            stopMusicPlayback();
+                            return;
+                          }
+                          setPlayingMusicMessageId(message.id);
+                          void playMusic(
+                            {
+                              trackId: message.music!.trackId,
+                              trackUri: message.music!.trackUri,
+                              title: message.music!.title,
+                              artist: message.music!.artist,
+                              album: message.music!.album,
+                              imageUrl: message.music!.imageUrl,
+                              spotifyUrl: message.music!.spotifyUrl,
+                            },
+                            message.music!.startMs,
+                            message.music!.endMs,
+                            false,
+                          );
+                        }}
+                      >
+                        {playingMusicMessageId === message.id ? (
+                          <span className="music-equalizer" aria-hidden="true">
+                            <i />
+                            <i />
+                            <i />
+                          </span>
+                        ) : (
+                          "▶"
+                        )}
+                      </button>
+                    </div>
                   )}
-                </time>
-              </div>
-              {reactions[message.id] && (
-                <span className="reaction-pill">
-                  {reactions[message.id]?.emoji}
-                  {(reactions[message.id]?.count ?? 0) > 1 &&
-                    ` ${reactions[message.id]?.count}`}
-                </span>
-              )}
-            </article>
+                  {message.deliveryStatus === "uploading" &&
+                    message.attachment && (
+                      <div className="attachment-sending" aria-live="polite">
+                        {message.attachment.localUrl &&
+                          message.attachment.mimeType.startsWith("image/") && (
+                            <img
+                              className="message-image"
+                              src={message.attachment.localUrl}
+                              alt={message.attachment.filename}
+                            />
+                          )}
+                        <span>Invio in corso…</span>
+                      </div>
+                    )}
+                  {message.deliveryStatus === "failed" &&
+                    message.attachment && (
+                      <div className="attachment-failed" role="status">
+                        <span>
+                          Invio non riuscito: {message.attachment.filename}
+                        </span>
+                      </div>
+                    )}
+                  {!message.deliveryStatus &&
+                    message.attachment?.viewOnce &&
+                    message.memberId !== conversation.member.id &&
+                    !message.attachment.consumedAt &&
+                    !consumedMedia.has(message.attachment.id) && (
+                      <button
+                        type="button"
+                        className="view-once-button"
+                        onClick={() => {
+                          setConsumedMedia((current) =>
+                            new Set(current).add(message.attachment!.id),
+                          );
+                          if (message.attachment!.mimeType.startsWith("video/"))
+                            setFullscreenVideo(
+                              `/media/${message.attachment!.id}`,
+                            );
+                          else
+                            setFullscreenImage(
+                              `/media/${message.attachment!.id}`,
+                            );
+                        }}
+                      >
+                        Apri{" "}
+                        {message.attachment.mimeType.startsWith("video/")
+                          ? "video"
+                          : "foto"}
+                      </button>
+                    )}
+                  {!message.deliveryStatus &&
+                    message.attachment?.viewOnce &&
+                    message.memberId !== conversation.member.id &&
+                    (message.attachment.consumedAt ||
+                      consumedMedia.has(message.attachment.id)) && (
+                      <span className="view-once-consumed">Media aperto</span>
+                    )}
+                  {!message.deliveryStatus &&
+                    message.attachment?.viewOnce &&
+                    message.memberId === conversation.member.id && (
+                      <span className="view-once-consumed">Media inviato</span>
+                    )}
+                  {!message.deliveryStatus &&
+                    !message.attachment?.viewOnce &&
+                    message.attachment?.mimeType.startsWith("image/") && (
+                      <img
+                        onLoad={() => {
+                          if (atBottomRef.current && messagesRef.current)
+                            messagesRef.current.scrollTop =
+                              messagesRef.current.scrollHeight;
+                        }}
+                        onClick={() =>
+                          setFullscreenImage(`/media/${message.attachment!.id}`)
+                        }
+                        className="message-image"
+                        src={
+                          message.attachment.localUrl ??
+                          `/media/${message.attachment.id}`
+                        }
+                        alt={message.attachment.filename}
+                      />
+                    )}
+                  {!message.deliveryStatus &&
+                    message.attachment?.mimeType.startsWith("audio/") && (
+                      <audio
+                        className="message-audio"
+                        controls
+                        preload="metadata"
+                        src={
+                          message.attachment.localUrl ??
+                          `/media/${message.attachment.id}`
+                        }
+                        aria-label={`Riproduci audio ${message.attachment.filename}`}
+                      />
+                    )}
+                  {!message.deliveryStatus &&
+                    !message.attachment?.viewOnce &&
+                    message.attachment?.mimeType.startsWith("video/") && (
+                      <video
+                        className="message-video"
+                        controls
+                        preload="metadata"
+                        src={
+                          message.attachment.localUrl ??
+                          `/media/${message.attachment.id}`
+                        }
+                        aria-label={`Riproduci video ${message.attachment.filename}`}
+                        onClick={() =>
+                          setFullscreenVideo(`/media/${message.attachment!.id}`)
+                        }
+                      />
+                    )}
+                  {!message.deliveryStatus &&
+                    message.attachment &&
+                    !message.attachment.mimeType.startsWith("image/") &&
+                    !message.attachment.mimeType.startsWith("audio/") &&
+                    !message.attachment.mimeType.startsWith("video/") && (
+                      <a
+                        href={`/media/${message.attachment.id}`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        📎 {message.attachment.filename}
+                      </a>
+                    )}
+                  {/^(immagine|video) omess[ao]$/i.test(message.body.trim()) ? (
+                    <span className="media-opened">
+                      <span className="media-opened-icon" aria-hidden="true" />
+                      <span>Messaggio aperto</span>
+                    </span>
+                  ) : (
+                    message.body && (
+                      <div className="message-caption">
+                        {renderMessageBody(message.body, search)}
+                      </div>
+                    )
+                  )}
+                  <time>
+                    {new Date(message.createdAt).toLocaleTimeString([], {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                    {message.memberId === conversation.member.id &&
+                      (message.deliveryStatus === "uploading" ? (
+                        <span className="checks sending-check">◌</span>
+                      ) : message.deliveryStatus === "failed" ? (
+                        <span className="checks failed-check">!</span>
+                      ) : (
+                        <span className="checks">✓✓</span>
+                      ))}
+                    {message.editedAt && (
+                      <span className="edited-label">modificato</span>
+                    )}
+                  </time>
+                </div>
+                {reactions[message.id] && (
+                  <span className="reaction-pill">
+                    {reactions[message.id]?.emoji}
+                    {(reactions[message.id]?.count ?? 0) > 1 &&
+                      ` ${reactions[message.id]?.count}`}
+                  </span>
+                )}
+              </article>
             </Fragment>
           ))
         )}
@@ -1264,7 +1764,11 @@ function Chat({
       {showJumpToLatest && (
         <button
           className="unread-pill"
-          aria-label={unreadCount > 0 ? `${unreadCount} nuovi messaggi, vai in fondo` : "Vai agli ultimi messaggi"}
+          aria-label={
+            unreadCount > 0
+              ? `${unreadCount} nuovi messaggi, vai in fondo`
+              : "Vai agli ultimi messaggi"
+          }
           onClick={async () => {
             setShowSearch(false);
             setSearch("");
@@ -1272,14 +1776,180 @@ function Chat({
             setSearchTotal(0);
             setUnreadCount(0);
             atBottomRef.current = true;
-            const result = await api<{ messages: ChatMessage[] }>("/api/v1/messages");
+            const result = await api<{ messages: ChatMessage[] }>(
+              "/api/v1/messages",
+            );
             setMessages(result.messages);
             setScrollDate(result.messages.at(-1)?.createdAt);
             setShowJumpToLatest(false);
           }}
         >
-          <span>↓</span>{unreadCount > 0 && ` ${unreadCount}`}
+          <span>↓</span>
+          {unreadCount > 0 && ` ${unreadCount}`}
         </button>
+      )}
+      {showMusicPicker && (
+        <section className="music-picker" aria-label="Cerca musica su Spotify">
+          <button
+            type="button"
+            className="music-picker-close"
+            onClick={() => {
+              stopMusicPlayback();
+              setShowMusicPicker(false);
+            }}
+            aria-label="Chiudi selettore musicale"
+          >
+            ×
+          </button>
+          {!spotifyConfigured ? (
+            <p>Spotify non è ancora configurato dal server.</p>
+          ) : !spotifyConnected ? (
+            <div className="music-connect">
+              {spotifyCanConnect ? (
+                <>
+                  <p>
+                    Collega Spotify per cercare e ascoltare brani nella chat.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      window.location.href = "/api/v1/spotify/login";
+                    }}
+                  >
+                    Collega Spotify
+                  </button>
+                </>
+              ) : (
+                <p>
+                  Il proprietario della chat deve collegare Spotify prima di
+                  poter ascoltare i brani.
+                </p>
+              )}
+            </div>
+          ) : (
+            <>
+              <form
+                className="music-search"
+                onSubmit={(event) => void searchSpotify(event)}
+              >
+                <input
+                  value={musicQuery}
+                  onChange={(event) => setMusicQuery(event.target.value)}
+                  placeholder="Cerca brano o artista"
+                  autoFocus
+                />
+                <button type="submit">Cerca</button>
+              </form>
+              {musicResults.length > 0 && !selectedMusic && (
+                <div className="music-results">
+                  {musicResults.map((track) => (
+                    <button
+                      type="button"
+                      key={track.trackId}
+                      onClick={() => chooseMusic(track)}
+                    >
+                      {track.imageUrl && <img src={track.imageUrl} alt="" />}
+                      <span>
+                        <strong>{track.title}</strong>
+                        <small>
+                          {track.artist} · {track.album}
+                        </small>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {selectedMusic && (
+                <div className="music-selection">
+                  <div className="music-selection-heading">
+                    {selectedMusic.imageUrl && (
+                      <img src={selectedMusic.imageUrl} alt="" />
+                    )}
+                    <span>
+                      <strong>{selectedMusic.title}</strong>
+                      <small>{selectedMusic.artist}</small>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        stopMusicPlayback();
+                        setSelectedMusic(undefined);
+                      }}
+                      aria-label="Cambia brano"
+                    >
+                      Cambia
+                    </button>
+                  </div>
+                  <div className="music-duration-select">
+                    <span>Durata del frammento</span>
+                    <div className="music-duration-control">
+                      <button
+                        type="button"
+                        className="music-duration-trigger"
+                        aria-expanded={musicDurationMenuOpen}
+                        aria-haspopup="listbox"
+                        onClick={() =>
+                          setMusicDurationMenuOpen((current) => !current)
+                        }
+                      >
+                        {(musicEndMs - musicStartMs) / 1000} secondi
+                        <span aria-hidden="true">⌄</span>
+                      </button>
+                      {musicDurationMenuOpen && (
+                        <div className="music-duration-menu" role="listbox">
+                          {MUSIC_CLIP_OPTIONS_MS.map((value) => {
+                            const disabled = value > musicDurationMs;
+                            const selected =
+                              value === musicEndMs - musicStartMs;
+                            return (
+                              <button
+                                type="button"
+                                role="option"
+                                aria-selected={selected}
+                                key={value}
+                                disabled={disabled}
+                                className={selected ? "selected" : ""}
+                                onClick={() => {
+                                  changeMusicClipLength(value);
+                                  setMusicDurationMenuOpen(false);
+                                }}
+                              >
+                                {value / 1000} secondi
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="music-range-labels">
+                    <span>Inizio {formatMusicTime(musicStartMs)}</span>
+                    <span>Fine {formatMusicTime(musicEndMs)}</span>
+                  </div>
+                  <div
+                    className="music-range"
+                    ref={musicRangeRef}
+                    onPointerMove={(event) => updateMusicDrag(event.clientX)}
+                    onPointerUp={finishMusicDrag}
+                    onPointerCancel={finishMusicDrag}
+                  >
+                    <div
+                      className="music-range-fill"
+                      style={
+                        {
+                          "--range-start": `${(musicStartMs / musicDurationMs) * 100}%`,
+                          "--range-end": `${(musicEndMs / musicDurationMs) * 100}%`,
+                        } as CSSProperties
+                      }
+                      onPointerDown={(event) => beginMusicDrag("window", event)}
+                    />
+                  </div>
+                  <small>Seleziona un frammento massimo di 60 secondi.</small>
+                </div>
+              )}
+            </>
+          )}
+        </section>
       )}
       <form className="composer" onSubmit={send}>
         <input
@@ -1337,6 +2007,14 @@ function Chat({
           >
             ☺︎
           </button>
+          <button
+            type="button"
+            className={`music-button${showMusicPicker ? " active" : ""}`}
+            aria-label="Condividi musica Spotify"
+            onClick={() => setShowMusicPicker((open) => !open)}
+          >
+            ♫
+          </button>
         </div>
         {attachmentPreview && (
           <div className="attachment-preview">
@@ -1349,7 +2027,9 @@ function Chat({
                 setAttachmentPreview(undefined);
                 setViewOnce(false);
               }}
-            >×</button>
+            >
+              ×
+            </button>
             {attachmentPreview.startsWith("blob:") ? (
               <img src={attachmentPreview} alt="Anteprima allegato" />
             ) : (
@@ -1357,7 +2037,11 @@ function Chat({
             )}
             {pendingFile && (
               <label className="view-once-toggle">
-                <input type="checkbox" checked={viewOnce} onChange={(event) => setViewOnce(event.target.checked)} />
+                <input
+                  type="checkbox"
+                  checked={viewOnce}
+                  onChange={(event) => setViewOnce(event.target.checked)}
+                />
                 Visualizza una volta
               </label>
             )}
@@ -1379,7 +2063,11 @@ function Chat({
           <button
             type="button"
             className={`recording-button${recording ? " recording" : ""}`}
-            aria-label={recording ? "Ferma e invia messaggio vocale" : "Registra messaggio vocale"}
+            aria-label={
+              recording
+                ? "Ferma e invia messaggio vocale"
+                : "Registra messaggio vocale"
+            }
             onClick={() => void toggleRecording()}
           >
             {recording ? (
@@ -1478,18 +2166,22 @@ function Chat({
           <button className="lightbox-close" aria-label="Chiudi">
             ×
           </button>
-          {fullscreenImage && <img
+          {fullscreenImage && (
+            <img
               src={fullscreenImage}
               alt="Immagine a schermo intero"
               onClick={(event) => event.stopPropagation()}
-            />}
-          {fullscreenVideo && <video
+            />
+          )}
+          {fullscreenVideo && (
+            <video
               src={fullscreenVideo}
               controls
               autoPlay
               playsInline
               onClick={(event) => event.stopPropagation()}
-            />}
+            />
+          )}
         </div>
       )}
       {reloadRequired && (

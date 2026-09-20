@@ -13,7 +13,13 @@ import {
   createReadStream,
 } from "node:fs";
 import { pipeline } from "node:stream/promises";
-import { randomUUID } from "node:crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  randomBytes,
+  randomUUID,
+} from "node:crypto";
 import { join } from "node:path";
 import type {
   ChatMessage,
@@ -33,12 +39,94 @@ import {
 
 const MAX_ATTACHMENT_SIZE = 100 * 1024 * 1024;
 
-
 export interface AppOptions {
   dataDir: string;
   publicOrigin: string;
   staticRoot?: string;
   logger?: boolean;
+  spotifyClientId?: string;
+  spotifyClientSecret?: string;
+}
+
+type MusicMessage = NonNullable<ChatMessage["music"]>;
+
+function spotifyKey(secret: string) {
+  return createHash("sha256").update(secret).digest();
+}
+function protectSpotifyToken(value: string, secret: string) {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", spotifyKey(secret), iv);
+  const encrypted = Buffer.concat([
+    cipher.update(value, "utf8"),
+    cipher.final(),
+  ]);
+  return `${iv.toString("base64url")}.${cipher.getAuthTag().toString("base64url")}.${encrypted.toString("base64url")}`;
+}
+function revealSpotifyToken(value: string, secret: string) {
+  const [ivText, tagText, encryptedText] = value.split(".");
+  if (!ivText || !tagText || !encryptedText)
+    throw new Error("Invalid Spotify token");
+  const decipher = createDecipheriv(
+    "aes-256-gcm",
+    spotifyKey(secret),
+    Buffer.from(ivText, "base64url"),
+  );
+  decipher.setAuthTag(Buffer.from(tagText, "base64url"));
+  return Buffer.concat([
+    decipher.update(Buffer.from(encryptedText, "base64url")),
+    decipher.final(),
+  ]).toString("utf8");
+}
+function spotifyConfig(options: AppOptions) {
+  if (!options.spotifyClientId || !options.spotifyClientSecret)
+    throw new Error("Spotify non configurato sul server.");
+  return {
+    clientId: options.spotifyClientId,
+    clientSecret: options.spotifyClientSecret,
+  };
+}
+function normalizeMusic(value: unknown): MusicMessage | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const item = value as Partial<MusicMessage>;
+  if (
+    typeof item.trackId !== "string" ||
+    !/^[A-Za-z0-9]{22}$/.test(item.trackId) ||
+    typeof item.trackUri !== "string" ||
+    item.trackUri !== `spotify:track:${item.trackId}` ||
+    typeof item.title !== "string" ||
+    typeof item.artist !== "string" ||
+    typeof item.album !== "string" ||
+    typeof item.spotifyUrl !== "string" ||
+    !/^https:\/\/open\.spotify\.com\/track\/[A-Za-z0-9]{22}(?:\?.*)?$/.test(
+      item.spotifyUrl,
+    )
+  )
+    return undefined;
+  const startMs = Number(item.startMs);
+  const endMs = Number(item.endMs);
+  if (
+    !Number.isInteger(startMs) ||
+    !Number.isInteger(endMs) ||
+    startMs < 0 ||
+    endMs <= startMs ||
+    endMs - startMs > 60_000
+  )
+    return undefined;
+  return {
+    trackId: item.trackId,
+    trackUri: item.trackUri,
+    title: item.title.slice(0, 200),
+    artist: item.artist.slice(0, 200),
+    album: item.album.slice(0, 200),
+    imageUrl:
+      typeof item.imageUrl === "string" &&
+      /^https:\/\/i\.scdn\.co\//.test(item.imageUrl)
+        ? item.imageUrl
+        : undefined,
+    spotifyUrl: item.spotifyUrl,
+    startMs,
+    endMs,
+  };
 }
 
 export async function buildApp(options: AppOptions) {
@@ -80,6 +168,87 @@ export async function buildApp(options: AppOptions) {
       callback(null, !origin || origin === options.publicOrigin);
     },
   });
+  let spotifyAppToken: { value: string; expiresAt: number } | undefined;
+  async function getSpotifyAppToken() {
+    const config = spotifyConfig(options);
+    if (spotifyAppToken && spotifyAppToken.expiresAt > Date.now() + 60_000)
+      return spotifyAppToken.value;
+    const response = await fetch("https://accounts.spotify.com/api/token", {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${Buffer.from(`${config.clientId}:${config.clientSecret}`).toString("base64")}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: "grant_type=client_credentials",
+    });
+    if (!response.ok) throw new Error("Spotify non disponibile.");
+    const payload = (await response.json()) as {
+      access_token?: string;
+      expires_in?: number;
+    };
+    if (!payload.access_token) throw new Error("Token Spotify non valido.");
+    spotifyAppToken = {
+      value: payload.access_token,
+      expiresAt: Date.now() + (payload.expires_in ?? 3600) * 1000,
+    };
+    return payload.access_token;
+  }
+  async function getSpotifyToken() {
+    const config = spotifyConfig(options);
+    const row = db
+      .prepare(
+        "SELECT refresh_token, access_token, access_expires_at FROM spotify_app_connection WHERE id = 1",
+      )
+      .get() as
+      | {
+          refresh_token: string;
+          access_token: string;
+          access_expires_at: string;
+        }
+      | undefined;
+    if (!row) return undefined;
+    if (new Date(row.access_expires_at).getTime() > Date.now() + 60_000)
+      return revealSpotifyToken(row.access_token, config.clientSecret);
+    const response = await fetch("https://accounts.spotify.com/api/token", {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${Buffer.from(`${config.clientId}:${config.clientSecret}`).toString("base64")}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: revealSpotifyToken(
+          row.refresh_token,
+          config.clientSecret,
+        ),
+      }),
+    });
+    if (!response.ok) return undefined;
+    const payload = (await response.json()) as {
+      access_token?: string;
+      expires_in?: number;
+      refresh_token?: string;
+    };
+    if (!payload.access_token) return undefined;
+    const now = new Date().toISOString();
+    db.prepare(
+      "UPDATE spotify_app_connection SET access_token = ?, refresh_token = ?, access_expires_at = ?, updated_at = ? WHERE id = 1",
+    ).run(
+      protectSpotifyToken(payload.access_token, config.clientSecret),
+      protectSpotifyToken(
+        payload.refresh_token
+          ? payload.refresh_token
+          : revealSpotifyToken(row.refresh_token, config.clientSecret),
+        config.clientSecret,
+      ),
+      new Date(Date.now() + (payload.expires_in ?? 3600) * 1000).toISOString(),
+      now,
+    );
+    return payload.access_token;
+  }
+  function spotifyRedirectUri() {
+    return `${options.publicOrigin}/api/v1/spotify/callback`;
+  }
   io.on("connection", (socket) => {
     const auth = getAuthContext(db, {
       headers: { cookie: socket.handshake.headers.cookie },
@@ -94,7 +263,8 @@ export async function buildApp(options: AppOptions) {
         headers: { cookie: socket.handshake.headers.cookie },
       } as FastifyRequest);
       const body = typeof payload?.body === "string" ? payload.body.trim() : "";
-      if (!auth || !body || body.length > 4000) {
+      const music = normalizeMusic(payload?.music);
+      if (!auth || (!body && !music) || body.length > 4000) {
         ack({ error: "Messaggio non valido o sessione scaduta." });
         return;
       }
@@ -110,6 +280,21 @@ export async function buildApp(options: AppOptions) {
         createdAt,
         payload.replyToId ?? null,
       );
+      if (music)
+        db.prepare(
+          "INSERT INTO message_music (message_id, track_id, track_uri, title, artist, album, image_url, spotify_url, start_ms, end_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ).run(
+          id,
+          music.trackId,
+          music.trackUri,
+          music.title,
+          music.artist,
+          music.album,
+          music.imageUrl ?? null,
+          music.spotifyUrl,
+          music.startMs,
+          music.endMs,
+        );
       const message: ChatMessage = {
         id,
         conversationId: auth.conversationId,
@@ -117,6 +302,7 @@ export async function buildApp(options: AppOptions) {
         authorName: auth.displayName,
         body,
         createdAt,
+        music,
       };
       if (payload.replyToId) {
         const reply = db
@@ -240,7 +426,7 @@ export async function buildApp(options: AppOptions) {
     if (options.staticRoot)
       reply.header(
         "Content-Security-Policy",
-        "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+        "default-src 'self'; script-src 'self' https://sdk.scdn.co; style-src 'self'; img-src 'self' data: blob: https://i.scdn.co; connect-src 'self' https://api.spotify.com wss://*.spotify.com https://*.spotify.com; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
       );
     if (request.url.startsWith("/api/") || request.url.startsWith("/health/"))
       reply.header("Cache-Control", "no-store");
@@ -469,8 +655,138 @@ export async function buildApp(options: AppOptions) {
       },
     };
   });
-  app.get<{ Querystring: { before?: string; after?: string; q?: string; around?: string } }>(
-    "/api/v1/messages",
+  app.get("/api/v1/spotify/status", async (request, reply) => {
+    const auth = getAuthContext(db, request);
+    if (!auth)
+      return apiError(
+        reply,
+        401,
+        "SESSION_REQUIRED",
+        "La sessione non è valida.",
+      );
+    return {
+      configured: Boolean(
+        options.spotifyClientId && options.spotifyClientSecret,
+      ),
+      canConnect: auth.role === "owner",
+      connected: Boolean(
+        db.prepare("SELECT 1 FROM spotify_app_connection WHERE id = 1").get(),
+      ),
+    };
+  });
+  app.get("/api/v1/spotify/login", async (request, reply) => {
+    const auth = getAuthContext(db, request);
+    if (!auth)
+      return apiError(
+        reply,
+        401,
+        "SESSION_REQUIRED",
+        "La sessione non è valida.",
+      );
+    if (auth.role !== "owner")
+      return apiError(
+        reply,
+        403,
+        "SPOTIFY_OWNER_REQUIRED",
+        "Solo il proprietario della chat può collegare Spotify.",
+      );
+    const config = spotifyConfig(options);
+    const state = randomBytes(24).toString("base64url");
+    const verifier = randomBytes(64).toString("base64url");
+    const challenge = createHash("sha256").update(verifier).digest("base64url");
+    db.prepare("DELETE FROM spotify_oauth_states WHERE expires_at < ?").run(
+      new Date().toISOString(),
+    );
+    db.prepare(
+      "INSERT INTO spotify_oauth_states (state, member_id, code_verifier, expires_at) VALUES (?, ?, ?, ?)",
+    ).run(
+      state,
+      auth.memberId,
+      verifier,
+      new Date(Date.now() + 10 * 60_000).toISOString(),
+    );
+    const url = new URL("https://accounts.spotify.com/authorize");
+    url.search = new URLSearchParams({
+      client_id: config.clientId,
+      response_type: "code",
+      redirect_uri: spotifyRedirectUri(),
+      state,
+      code_challenge_method: "S256",
+      code_challenge: challenge,
+      scope:
+        "streaming user-read-email user-read-private user-read-playback-state user-modify-playback-state",
+    }).toString();
+    return reply.redirect(url.toString());
+  });
+  app.get<{ Querystring: { code?: string; state?: string; error?: string } }>(
+    "/api/v1/spotify/callback",
+    async (request, reply) => {
+      const state = request.query.state;
+      const row =
+        state &&
+        (db
+          .prepare(
+            "SELECT member_id, code_verifier, expires_at FROM spotify_oauth_states WHERE state = ?",
+          )
+          .get(state) as
+          | { member_id: string; code_verifier: string; expires_at: string }
+          | undefined);
+      if (
+        !row ||
+        new Date(row.expires_at).getTime() < Date.now() ||
+        !request.query.code
+      )
+        return reply.redirect(`${options.publicOrigin}/?spotify=error`);
+      db.prepare("DELETE FROM spotify_oauth_states WHERE state = ?").run(state);
+      const config = spotifyConfig(options);
+      const tokenResponse = await fetch(
+        "https://accounts.spotify.com/api/token",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Basic ${Buffer.from(`${config.clientId}:${config.clientSecret}`).toString("base64")}`,
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: new URLSearchParams({
+            grant_type: "authorization_code",
+            code: request.query.code,
+            redirect_uri: spotifyRedirectUri(),
+            client_id: config.clientId,
+            code_verifier: row.code_verifier,
+          }),
+        },
+      );
+      if (!tokenResponse.ok)
+        return reply.redirect(`${options.publicOrigin}/?spotify=error`);
+      const tokens = (await tokenResponse.json()) as {
+        access_token?: string;
+        refresh_token?: string;
+        expires_in?: number;
+      };
+      if (!tokens.access_token || !tokens.refresh_token)
+        return reply.redirect(`${options.publicOrigin}/?spotify=error`);
+      const profileResponse = await fetch("https://api.spotify.com/v1/me", {
+        headers: { Authorization: `Bearer ${tokens.access_token}` },
+      });
+      const profile = (await profileResponse.json()) as { id?: string };
+      if (!profile.id)
+        return reply.redirect(`${options.publicOrigin}/?spotify=error`);
+      const now = new Date().toISOString();
+      db.prepare(
+        "INSERT INTO spotify_app_connection (id, spotify_user_id, refresh_token, access_token, access_expires_at, created_at, updated_at) VALUES (1, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET spotify_user_id = excluded.spotify_user_id, refresh_token = excluded.refresh_token, access_token = excluded.access_token, access_expires_at = excluded.access_expires_at, updated_at = excluded.updated_at",
+      ).run(
+        profile.id,
+        protectSpotifyToken(tokens.refresh_token, config.clientSecret),
+        protectSpotifyToken(tokens.access_token, config.clientSecret),
+        new Date(Date.now() + (tokens.expires_in ?? 3600) * 1000).toISOString(),
+        now,
+        now,
+      );
+      return reply.redirect(`${options.publicOrigin}/?spotify=connected`);
+    },
+  );
+  app.get<{ Querystring: { q?: string } }>(
+    "/api/v1/spotify/search",
     async (request, reply) => {
       const auth = getAuthContext(db, request);
       if (!auth)
@@ -480,105 +796,301 @@ export async function buildApp(options: AppOptions) {
           "SESSION_REQUIRED",
           "La sessione non è valida.",
         );
-      const before = request.query.before;
-      const after = request.query.after;
-      const query = request.query.q?.trim();
-      const around = request.query.around;
-      const matchRows = query
-        ? (db
-            .prepare(
-              "SELECT id, created_at AS createdAt FROM messages WHERE conversation_id = ? AND deleted_at IS NULL AND body LIKE ? ORDER BY created_at DESC, id DESC",
-            )
-            .all(auth.conversationId, `%${query}%`) as Array<{ id: string; createdAt: string }>)
-        : [];
-      const total = query
-        ? (db
+      const query = request.query.q?.trim().slice(0, 100);
+      if (!query) return { tracks: [] };
+      try {
+        const response = await fetch(
+          `https://api.spotify.com/v1/search?${new URLSearchParams({ q: query, type: "track", limit: "8" })}`,
+          {
+            headers: { Authorization: `Bearer ${await getSpotifyAppToken()}` },
+          },
+        );
+        if (!response.ok)
+          return apiError(
+            reply,
+            response.status === 429 ? 429 : 502,
+            "SPOTIFY_SEARCH_FAILED",
+            "Ricerca Spotify non disponibile.",
+          );
+        const payload = (await response.json()) as {
+          tracks?: {
+            items?: Array<{
+              id: string;
+              uri: string;
+              name: string;
+              duration_ms: number;
+              artists?: Array<{ name: string }>;
+              album?: { name: string; images?: Array<{ url: string }> };
+              external_urls?: { spotify?: string };
+            }>;
+          };
+        };
+        return {
+          tracks: (payload.tracks?.items ?? []).map((track) => ({
+            trackId: track.id,
+            trackUri: track.uri,
+            title: track.name,
+            artist:
+              track.artists?.map((artist) => artist.name).join(", ") ?? "",
+            album: track.album?.name ?? "",
+            durationMs: track.duration_ms,
+            imageUrl: track.album?.images?.[0]?.url,
+            spotifyUrl:
+              track.external_urls?.spotify ??
+              `https://open.spotify.com/track/${track.id}`,
+          })),
+        };
+      } catch (error) {
+        return apiError(
+          reply,
+          503,
+          "SPOTIFY_UNAVAILABLE",
+          error instanceof Error ? error.message : "Spotify non disponibile.",
+        );
+      }
+    },
+  );
+  app.get("/api/v1/spotify/token", async (request, reply) => {
+    const auth = getAuthContext(db, request);
+    if (!auth)
+      return apiError(
+        reply,
+        401,
+        "SESSION_REQUIRED",
+        "La sessione non è valida.",
+      );
+    try {
+      const token = await getSpotifyToken();
+      if (!token)
+        return apiError(
+          reply,
+          403,
+          "SPOTIFY_NOT_CONNECTED",
+          "Collega Spotify per ascoltare nella chat.",
+        );
+      return { accessToken: token };
+    } catch {
+      return apiError(
+        reply,
+        503,
+        "SPOTIFY_UNAVAILABLE",
+        "Spotify non disponibile.",
+      );
+    }
+  });
+  app.put<{
+    Body: { deviceId?: unknown; trackUri?: unknown; positionMs?: unknown };
+  }>("/api/v1/spotify/play", async (request, reply) => {
+    const auth = getAuthContext(db, request);
+    if (!auth)
+      return apiError(
+        reply,
+        401,
+        "SESSION_REQUIRED",
+        "La sessione non è valida.",
+      );
+    if (
+      typeof request.body?.deviceId !== "string" ||
+      typeof request.body?.trackUri !== "string" ||
+      !/^spotify:track:[A-Za-z0-9]{22}$/.test(request.body.trackUri)
+    )
+      return apiError(reply, 422, "INVALID_TRACK", "Brano Spotify non valido.");
+    const token = await getSpotifyToken();
+    if (!token)
+      return apiError(
+        reply,
+        403,
+        "SPOTIFY_NOT_CONNECTED",
+        "Collega Spotify per ascoltare nella chat.",
+      );
+    const positionMs = Number(request.body.positionMs ?? 0);
+    const response = await fetch(
+      `https://api.spotify.com/v1/me/player/play?device_id=${encodeURIComponent(request.body.deviceId)}`,
+      {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          uris: [request.body.trackUri],
+          position_ms:
+            Number.isInteger(positionMs) && positionMs >= 0 ? positionMs : 0,
+        }),
+      },
+    );
+    if (!response.ok)
+      return apiError(
+        reply,
+        response.status === 404 ? 409 : 502,
+        "SPOTIFY_PLAY_FAILED",
+        "Non è stato possibile avviare la riproduzione Spotify.",
+      );
+    return { ok: true };
+  });
+  app.get<{
+    Querystring: {
+      before?: string;
+      after?: string;
+      q?: string;
+      around?: string;
+    };
+  }>("/api/v1/messages", async (request, reply) => {
+    const auth = getAuthContext(db, request);
+    if (!auth)
+      return apiError(
+        reply,
+        401,
+        "SESSION_REQUIRED",
+        "La sessione non è valida.",
+      );
+    const before = request.query.before;
+    const after = request.query.after;
+    const query = request.query.q?.trim();
+    const around = request.query.around;
+    const matchRows = query
+      ? (db
+          .prepare(
+            "SELECT id, created_at AS createdAt FROM messages WHERE conversation_id = ? AND deleted_at IS NULL AND body LIKE ? ORDER BY created_at DESC, id DESC",
+          )
+          .all(auth.conversationId, `%${query}%`) as Array<{
+          id: string;
+          createdAt: string;
+        }>)
+      : [];
+    const total = query
+      ? (
+          db
             .prepare(
               "SELECT count(*) AS count FROM messages WHERE conversation_id = ? AND deleted_at IS NULL AND body LIKE ?",
             )
-            .get(auth.conversationId, `%${query}%`) as { count: number }).count
-        : undefined;
-      let contextIds: string[] | undefined;
-      const contextTarget = around ?? (query ? matchRows[0]?.id : undefined);
-      if (contextTarget) {
-        const target = db
-          .prepare("SELECT created_at AS createdAt FROM messages WHERE id = ? AND conversation_id = ?")
-          .get(contextTarget, auth.conversationId) as { createdAt: string } | undefined;
-        if (target) {
-          const older = db
-            .prepare("SELECT id FROM messages WHERE conversation_id = ? AND deleted_at IS NULL AND created_at < ? ORDER BY created_at DESC, id DESC LIMIT 50")
-            .all(auth.conversationId, target.createdAt) as Array<{ id: string }>;
-          const newer = db
-            .prepare("SELECT id FROM messages WHERE conversation_id = ? AND deleted_at IS NULL AND created_at > ? ORDER BY created_at ASC, id ASC LIMIT 50")
-            .all(auth.conversationId, target.createdAt) as Array<{ id: string }>;
-          contextIds = [contextTarget, ...older.map((row) => row.id), ...newer.map((row) => row.id)];
-        }
-      }
-      const descendingWindow = !contextIds && !after;
-      const rows = db
+            .get(auth.conversationId, `%${query}%`) as { count: number }
+        ).count
+      : undefined;
+    let contextIds: string[] | undefined;
+    const contextTarget = around ?? (query ? matchRows[0]?.id : undefined);
+    if (contextTarget) {
+      const target = db
         .prepare(
-          `SELECT m.id, m.conversation_id AS conversationId, m.member_id AS memberId, u.display_name AS authorName, m.body, m.created_at AS createdAt, m.edited_at AS editedAt, a.id AS attachmentId, a.filename AS attachmentFilename, a.mime_type AS attachmentMime, a.size AS attachmentSize, a.view_once AS attachmentViewOnce, a.consumed_at AS attachmentConsumedAt, r.id AS replyId, r.body AS replyBody, ru.display_name AS replyAuthor FROM messages m JOIN members u ON u.id = m.member_id LEFT JOIN attachments a ON a.message_id = m.id LEFT JOIN messages r ON r.id = m.reply_to_id LEFT JOIN members ru ON ru.id = r.member_id WHERE m.conversation_id = ? AND m.deleted_at IS NULL ${query && !contextIds ? "AND m.body LIKE ?" : ""} ${contextIds ? `AND m.id IN (${contextIds.map(() => "?").join(",")})` : ""} ${before ? "AND (m.created_at < (SELECT created_at FROM messages WHERE id = ?))" : ""} ${after ? "AND (m.created_at > (SELECT created_at FROM messages WHERE id = ?))" : ""} ORDER BY m.created_at ${descendingWindow ? "DESC" : "ASC"}, m.id ${descendingWindow ? "DESC" : "ASC"} ${(!query || before || after) && !contextIds ? "LIMIT 100" : ""}`,
+          "SELECT created_at AS createdAt FROM messages WHERE id = ? AND conversation_id = ?",
         )
-        .all(
-          ...([
-            auth.conversationId,
-            ...(query && !contextIds ? [`%${query}%`] : []),
-            ...(contextIds ?? []),
-            ...(before ? [before] : []),
-            ...(after ? [after] : []),
-          ] as string[]),
-        ) as ChatMessage[];
-      return {
-        ...(total === undefined ? {} : { total }),
-        ...(query ? { matches: matchRows } : {}),
-        messages: (descendingWindow ? rows.reverse() : rows).map((row) => {
-          const item = row as ChatMessage & {
-            replyId?: string;
-            replyBody?: string;
-            replyAuthor?: string;
-            attachmentId?: string;
-            attachmentFilename?: string;
-            attachmentMime?: string;
-            attachmentSize?: number;
-            attachmentViewOnce?: number;
-            attachmentConsumedAt?: string;
+        .get(contextTarget, auth.conversationId) as
+        { createdAt: string } | undefined;
+      if (target) {
+        const older = db
+          .prepare(
+            "SELECT id FROM messages WHERE conversation_id = ? AND deleted_at IS NULL AND created_at < ? ORDER BY created_at DESC, id DESC LIMIT 50",
+          )
+          .all(auth.conversationId, target.createdAt) as Array<{ id: string }>;
+        const newer = db
+          .prepare(
+            "SELECT id FROM messages WHERE conversation_id = ? AND deleted_at IS NULL AND created_at > ? ORDER BY created_at ASC, id ASC LIMIT 50",
+          )
+          .all(auth.conversationId, target.createdAt) as Array<{ id: string }>;
+        contextIds = [
+          contextTarget,
+          ...older.map((row) => row.id),
+          ...newer.map((row) => row.id),
+        ];
+      }
+    }
+    const descendingWindow = !contextIds && !after;
+    const rows = db
+      .prepare(
+        `SELECT m.id, m.conversation_id AS conversationId, m.member_id AS memberId, u.display_name AS authorName, m.body, m.created_at AS createdAt, m.edited_at AS editedAt, a.id AS attachmentId, a.filename AS attachmentFilename, a.mime_type AS attachmentMime, a.size AS attachmentSize, a.view_once AS attachmentViewOnce, a.consumed_at AS attachmentConsumedAt, mm.track_id AS musicTrackId, mm.track_uri AS musicTrackUri, mm.title AS musicTitle, mm.artist AS musicArtist, mm.album AS musicAlbum, mm.image_url AS musicImageUrl, mm.spotify_url AS musicSpotifyUrl, mm.start_ms AS musicStartMs, mm.end_ms AS musicEndMs, r.id AS replyId, r.body AS replyBody, ru.display_name AS replyAuthor FROM messages m JOIN members u ON u.id = m.member_id LEFT JOIN attachments a ON a.message_id = m.id LEFT JOIN message_music mm ON mm.message_id = m.id LEFT JOIN messages r ON r.id = m.reply_to_id LEFT JOIN members ru ON ru.id = r.member_id WHERE m.conversation_id = ? AND m.deleted_at IS NULL ${query && !contextIds ? "AND m.body LIKE ?" : ""} ${contextIds ? `AND m.id IN (${contextIds.map(() => "?").join(",")})` : ""} ${before ? "AND (m.created_at < (SELECT created_at FROM messages WHERE id = ?))" : ""} ${after ? "AND (m.created_at > (SELECT created_at FROM messages WHERE id = ?))" : ""} ORDER BY m.created_at ${descendingWindow ? "DESC" : "ASC"}, m.id ${descendingWindow ? "DESC" : "ASC"} ${(!query || before || after) && !contextIds ? "LIMIT 100" : ""}`,
+      )
+      .all(
+        ...([
+          auth.conversationId,
+          ...(query && !contextIds ? [`%${query}%`] : []),
+          ...(contextIds ?? []),
+          ...(before ? [before] : []),
+          ...(after ? [after] : []),
+        ] as string[]),
+      ) as ChatMessage[];
+    return {
+      ...(total === undefined ? {} : { total }),
+      ...(query ? { matches: matchRows } : {}),
+      messages: (descendingWindow ? rows.reverse() : rows).map((row) => {
+        const item = row as ChatMessage & {
+          replyId?: string;
+          replyBody?: string;
+          replyAuthor?: string;
+          attachmentId?: string;
+          attachmentFilename?: string;
+          attachmentMime?: string;
+          attachmentSize?: number;
+          attachmentViewOnce?: number;
+          attachmentConsumedAt?: string;
+          musicTrackId?: string;
+          musicTrackUri?: string;
+          musicTitle?: string;
+          musicArtist?: string;
+          musicAlbum?: string;
+          musicImageUrl?: string;
+          musicSpotifyUrl?: string;
+          musicStartMs?: number;
+          musicEndMs?: number;
+        };
+        if (item.replyId)
+          item.replyTo = {
+            id: item.replyId,
+            body: item.replyBody ?? "",
+            authorName: item.replyAuthor ?? "",
           };
-          if (item.replyId)
-            item.replyTo = {
-              id: item.replyId,
-              body: item.replyBody ?? "",
-              authorName: item.replyAuthor ?? "",
-            };
-          delete item.replyId;
-          delete item.replyBody;
-          delete item.replyAuthor;
-          if (item.attachmentId)
-            item.attachment = {
-              id: item.attachmentId,
-              filename: item.attachmentFilename ?? "file",
-              mimeType: item.attachmentMime ?? "application/octet-stream",
-              size: item.attachmentSize ?? 0,
-              viewOnce: item.attachmentViewOnce === 1,
-              consumedAt: item.attachmentConsumedAt,
-            };
-          const reaction = db
-            .prepare(
-              "SELECT mr.emoji, count(*) AS count, group_concat(m.display_name, ', ') AS names FROM message_reactions mr JOIN members m ON m.id = mr.member_id WHERE mr.message_id = ? GROUP BY mr.emoji ORDER BY count DESC LIMIT 1",
-            )
-            .get(item.id) as
-            { emoji: string; count: number; names?: string } | undefined;
-          if (reaction)
-            item.reaction = {
-              emoji: reaction.emoji,
-              count: reaction.count,
-              mine: false,
-              names: reaction.names?.split(", "),
-            };
-          return item;
-        }),
-      };
-    },
-  );
+        delete item.replyId;
+        delete item.replyBody;
+        delete item.replyAuthor;
+        if (item.attachmentId)
+          item.attachment = {
+            id: item.attachmentId,
+            filename: item.attachmentFilename ?? "file",
+            mimeType: item.attachmentMime ?? "application/octet-stream",
+            size: item.attachmentSize ?? 0,
+            viewOnce: item.attachmentViewOnce === 1,
+            consumedAt: item.attachmentConsumedAt,
+          };
+        if (item.musicTrackId)
+          item.music = {
+            trackId: item.musicTrackId,
+            trackUri:
+              item.musicTrackUri ?? `spotify:track:${item.musicTrackId}`,
+            title: item.musicTitle ?? "Brano Spotify",
+            artist: item.musicArtist ?? "",
+            album: item.musicAlbum ?? "",
+            imageUrl: item.musicImageUrl,
+            spotifyUrl:
+              item.musicSpotifyUrl ??
+              `https://open.spotify.com/track/${item.musicTrackId}`,
+            startMs: item.musicStartMs ?? 0,
+            endMs: item.musicEndMs ?? 0,
+          };
+        delete item.musicTrackId;
+        delete item.musicTrackUri;
+        delete item.musicTitle;
+        delete item.musicArtist;
+        delete item.musicAlbum;
+        delete item.musicImageUrl;
+        delete item.musicSpotifyUrl;
+        delete item.musicStartMs;
+        delete item.musicEndMs;
+        const reaction = db
+          .prepare(
+            "SELECT mr.emoji, count(*) AS count, group_concat(m.display_name, ', ') AS names FROM message_reactions mr JOIN members m ON m.id = mr.member_id WHERE mr.message_id = ? GROUP BY mr.emoji ORDER BY count DESC LIMIT 1",
+          )
+          .get(item.id) as
+          { emoji: string; count: number; names?: string } | undefined;
+        if (reaction)
+          item.reaction = {
+            emoji: reaction.emoji,
+            count: reaction.count,
+            mine: false,
+            names: reaction.names?.split(", "),
+          };
+        return item;
+      }),
+    };
+  });
   app.get<{ Params: { id: string } }>("/media/:id", async (request, reply) => {
     const auth = getAuthContext(db, request);
     if (!auth) return reply.code(401).send();
@@ -587,45 +1099,70 @@ export async function buildApp(options: AppOptions) {
         "SELECT a.storage_path, a.mime_type, a.filename, a.view_once AS viewOnce, a.consumed_at AS consumedAt, m.member_id AS senderMemberId FROM attachments a JOIN messages m ON m.id = a.message_id WHERE a.id = ? AND m.conversation_id = ?",
       )
       .get(request.params.id, auth.conversationId) as
-      { storage_path: string; mime_type: string; filename: string; viewOnce: number; consumedAt?: string; senderMemberId: string } | undefined;
+      | {
+          storage_path: string;
+          mime_type: string;
+          filename: string;
+          viewOnce: number;
+          consumedAt?: string;
+          senderMemberId: string;
+        }
+      | undefined;
     if (!row || !existsSync(row.storage_path)) return reply.code(404).send();
     if (row.viewOnce && row.senderMemberId === auth.memberId)
       return reply.code(403).send();
     const size = statSync(row.storage_path).size;
-    const responseMime = row.mime_type === "audio/mp4" && row.filename.toLowerCase().endsWith(".opus")
-      ? "audio/ogg"
-      : row.mime_type;
+    const responseMime =
+      row.mime_type === "audio/mp4" &&
+      row.filename.toLowerCase().endsWith(".opus")
+        ? "audio/ogg"
+        : row.mime_type;
     if (row.viewOnce) {
       if (row.consumedAt) return reply.code(410).send();
       const consumed = db
-        .prepare("UPDATE attachments SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL")
+        .prepare(
+          "UPDATE attachments SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL",
+        )
         .run(new Date().toISOString(), request.params.id);
       if (consumed.changes !== 1) return reply.code(410).send();
       return reply
         .type(responseMime)
         .header("Content-Length", size)
-        .header("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(row.filename)}`)
+        .header(
+          "Content-Disposition",
+          `inline; filename*=UTF-8''${encodeURIComponent(row.filename)}`,
+        )
         .send(createReadStream(row.storage_path));
     }
     const range = request.headers.range;
     const common = reply
       .type(responseMime)
       .header("Accept-Ranges", "bytes")
-      .header("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(row.filename)}`);
+      .header(
+        "Content-Disposition",
+        `inline; filename*=UTF-8''${encodeURIComponent(row.filename)}`,
+      );
     if (range?.startsWith("bytes=")) {
       const [startText, endText] = range.slice(6).split("-", 2);
       const start = Number(startText);
       const requestedEnd = endText ? Number(endText) : size - 1;
-      const end = Number.isFinite(requestedEnd) ? Math.min(requestedEnd, size - 1) : size - 1;
+      const end = Number.isFinite(requestedEnd)
+        ? Math.min(requestedEnd, size - 1)
+        : size - 1;
       if (!Number.isInteger(start) || start < 0 || start >= size || end < start)
-        return reply.code(416).header("Content-Range", `bytes */${size}`).send();
+        return reply
+          .code(416)
+          .header("Content-Range", `bytes */${size}`)
+          .send();
       return common
         .code(206)
         .header("Content-Length", end - start + 1)
         .header("Content-Range", `bytes ${start}-${end}/${size}`)
         .send(createReadStream(row.storage_path, { start, end }));
     }
-    return common.header("Content-Length", size).send(createReadStream(row.storage_path));
+    return common
+      .header("Content-Length", size)
+      .send(createReadStream(row.storage_path));
   });
   app.post("/api/v1/messages/attachment", async (request, reply) => {
     const auth = getAuthContext(db, request);
@@ -664,8 +1201,9 @@ export async function buildApp(options: AppOptions) {
       typeof captionField?.value === "string"
         ? captionField.value.slice(0, 4000)
         : "";
-    const clientMessageIdField = (part.fields as Record<string, unknown> | undefined)
-      ?.clientMessageId as { value?: unknown } | undefined;
+    const clientMessageIdField = (
+      part.fields as Record<string, unknown> | undefined
+    )?.clientMessageId as { value?: unknown } | undefined;
     const messageId =
       typeof clientMessageIdField?.value === "string" &&
       /^[0-9a-f-]{36}$/i.test(clientMessageIdField.value)
@@ -673,7 +1211,8 @@ export async function buildApp(options: AppOptions) {
         : randomUUID();
     const viewOnceField = (part.fields as Record<string, unknown> | undefined)
       ?.viewOnce as { value?: unknown } | undefined;
-    const viewOnce = viewOnceField?.value === "1" || viewOnceField?.value === "true";
+    const viewOnce =
+      viewOnceField?.value === "1" || viewOnceField?.value === "true";
     db.transaction(() => {
       db.prepare(
         "INSERT INTO messages (id, conversation_id, member_id, body, created_at, reply_to_id) VALUES (?, ?, ?, ?, ?, ?)",
