@@ -873,6 +873,17 @@ function Chat({
     musicLoopTimerRef.current = undefined;
     void spotifyPlayerRef.current?.pause();
   }
+  function resetMusicPicker() {
+    stopMusicPlayback();
+    setShowMusicPicker(false);
+    setMusicQuery("");
+    setMusicResults([]);
+    setSelectedMusic(undefined);
+    setMusicStartMs(0);
+    setMusicEndMs(MUSIC_DEFAULT_CLIP_MS);
+    setMusicDurationMs(180_000);
+    setMusicDurationMenuOpen(false);
+  }
   function chooseMusic(track: SpotifyTrack) {
     setPlayingMusicMessageId(undefined);
     setSelectedMusic(track);
@@ -1072,8 +1083,7 @@ function Chat({
           setBody("");
           setReplyTo(undefined);
           setSendingBody(undefined);
-          setSelectedMusic(undefined);
-          setShowMusicPicker(false);
+          resetMusicPicker();
           window.setTimeout(() => {
             if (atBottomRef.current && messagesRef.current)
               messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
@@ -1806,8 +1816,7 @@ function Chat({
             type="button"
             className="music-picker-close"
             onClick={() => {
-              stopMusicPlayback();
-              setShowMusicPicker(false);
+              resetMusicPicker();
             }}
             aria-label="Chiudi selettore musicale"
           >
@@ -2023,7 +2032,10 @@ function Chat({
             type="button"
             className={`music-button${showMusicPicker ? " active" : ""}`}
             aria-label="Condividi musica Spotify"
-            onClick={() => setShowMusicPicker((open) => !open)}
+            onClick={() => {
+              if (showMusicPicker) resetMusicPicker();
+              else setShowMusicPicker(true);
+            }}
           >
             ♫
           </button>

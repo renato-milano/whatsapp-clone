@@ -1000,8 +1000,7 @@ footer {
   white-space: nowrap;
   font-size: 10px;
 }
-.music-play,
-.music-button {
+.music-play {
   display: grid;
   min-width: 34px;
   min-height: 34px;
@@ -1054,12 +1053,24 @@ footer {
   }
 }
 .music-button {
+  display: grid;
+  min-width: 46px;
+  min-height: 46px;
+  padding: 6px;
+  place-items: center;
+  position: static;
+  z-index: 1;
+  border: 0;
+  border-radius: 50%;
   background: transparent;
   color: #397154;
   font-size: 22px;
+  line-height: 1;
+  opacity: 0.68;
 }
 .music-button.active {
   background: #dcf5c8;
+  opacity: 1;
 }
 .music-picker {
   position: relative;
