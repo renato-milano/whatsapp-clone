@@ -307,11 +307,22 @@ export async function buildApp(options: AppOptions) {
       if (payload.replyToId) {
         const reply = db
           .prepare(
-            "SELECT id, body, (SELECT display_name FROM members WHERE id = member_id) AS authorName FROM messages WHERE id = ? AND conversation_id = ?",
+            "SELECT id, body, (SELECT title FROM message_music WHERE message_id = messages.id) AS musicTitle, (SELECT display_name FROM members WHERE id = member_id) AS authorName FROM messages WHERE id = ? AND conversation_id = ?",
           )
           .get(payload.replyToId, auth.conversationId) as
-          { id: string; body: string; authorName: string } | undefined;
-        if (reply) message.replyTo = reply;
+          | {
+              id: string;
+              body: string;
+              musicTitle?: string;
+              authorName: string;
+            }
+          | undefined;
+        if (reply)
+          message.replyTo = {
+            id: reply.id,
+            body: reply.body || reply.musicTitle || "Brano Spotify",
+            authorName: reply.authorName,
+          };
       }
       io.to(auth.conversationId).emit("chat.message.created", message);
       ack({ message });
@@ -997,7 +1008,7 @@ export async function buildApp(options: AppOptions) {
     const descendingWindow = !contextIds && !after;
     const rows = db
       .prepare(
-        `SELECT m.id, m.conversation_id AS conversationId, m.member_id AS memberId, u.display_name AS authorName, m.body, m.created_at AS createdAt, m.edited_at AS editedAt, a.id AS attachmentId, a.filename AS attachmentFilename, a.mime_type AS attachmentMime, a.size AS attachmentSize, a.view_once AS attachmentViewOnce, a.consumed_at AS attachmentConsumedAt, mm.track_id AS musicTrackId, mm.track_uri AS musicTrackUri, mm.title AS musicTitle, mm.artist AS musicArtist, mm.album AS musicAlbum, mm.image_url AS musicImageUrl, mm.spotify_url AS musicSpotifyUrl, mm.start_ms AS musicStartMs, mm.end_ms AS musicEndMs, r.id AS replyId, r.body AS replyBody, ru.display_name AS replyAuthor FROM messages m JOIN members u ON u.id = m.member_id LEFT JOIN attachments a ON a.message_id = m.id LEFT JOIN message_music mm ON mm.message_id = m.id LEFT JOIN messages r ON r.id = m.reply_to_id LEFT JOIN members ru ON ru.id = r.member_id WHERE m.conversation_id = ? AND m.deleted_at IS NULL ${query && !contextIds ? "AND m.body LIKE ?" : ""} ${contextIds ? `AND m.id IN (${contextIds.map(() => "?").join(",")})` : ""} ${before ? "AND (m.created_at < (SELECT created_at FROM messages WHERE id = ?))" : ""} ${after ? "AND (m.created_at > (SELECT created_at FROM messages WHERE id = ?))" : ""} ORDER BY m.created_at ${descendingWindow ? "DESC" : "ASC"}, m.id ${descendingWindow ? "DESC" : "ASC"} ${(!query || before || after) && !contextIds ? "LIMIT 100" : ""}`,
+        `SELECT m.id, m.conversation_id AS conversationId, m.member_id AS memberId, u.display_name AS authorName, m.body, m.created_at AS createdAt, m.edited_at AS editedAt, a.id AS attachmentId, a.filename AS attachmentFilename, a.mime_type AS attachmentMime, a.size AS attachmentSize, a.view_once AS attachmentViewOnce, a.consumed_at AS attachmentConsumedAt, mm.track_id AS musicTrackId, mm.track_uri AS musicTrackUri, mm.title AS musicTitle, mm.artist AS musicArtist, mm.album AS musicAlbum, mm.image_url AS musicImageUrl, mm.spotify_url AS musicSpotifyUrl, mm.start_ms AS musicStartMs, mm.end_ms AS musicEndMs, r.id AS replyId, r.body AS replyBody, rmm.title AS replyMusicTitle, ru.display_name AS replyAuthor FROM messages m JOIN members u ON u.id = m.member_id LEFT JOIN attachments a ON a.message_id = m.id LEFT JOIN message_music mm ON mm.message_id = m.id LEFT JOIN messages r ON r.id = m.reply_to_id LEFT JOIN message_music rmm ON rmm.message_id = r.id LEFT JOIN members ru ON ru.id = r.member_id WHERE m.conversation_id = ? AND m.deleted_at IS NULL ${query && !contextIds ? "AND m.body LIKE ?" : ""} ${contextIds ? `AND m.id IN (${contextIds.map(() => "?").join(",")})` : ""} ${before ? "AND (m.created_at < (SELECT created_at FROM messages WHERE id = ?))" : ""} ${after ? "AND (m.created_at > (SELECT created_at FROM messages WHERE id = ?))" : ""} ORDER BY m.created_at ${descendingWindow ? "DESC" : "ASC"}, m.id ${descendingWindow ? "DESC" : "ASC"} ${(!query || before || after) && !contextIds ? "LIMIT 100" : ""}`,
       )
       .all(
         ...([
@@ -1015,6 +1026,7 @@ export async function buildApp(options: AppOptions) {
         const item = row as ChatMessage & {
           replyId?: string;
           replyBody?: string;
+          replyMusicTitle?: string;
           replyAuthor?: string;
           attachmentId?: string;
           attachmentFilename?: string;
@@ -1035,11 +1047,12 @@ export async function buildApp(options: AppOptions) {
         if (item.replyId)
           item.replyTo = {
             id: item.replyId,
-            body: item.replyBody ?? "",
+            body: item.replyBody || item.replyMusicTitle || "Brano Spotify",
             authorName: item.replyAuthor ?? "",
           };
         delete item.replyId;
         delete item.replyBody;
+        delete item.replyMusicTitle;
         delete item.replyAuthor;
         if (item.attachmentId)
           item.attachment = {
