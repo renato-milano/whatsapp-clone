@@ -653,7 +653,6 @@ export async function buildApp(options: AppOptions) {
     }
     const stat = (await import("node:fs/promises")).stat(storagePath);
     const size = (await stat).size;
-    const messageId = randomUUID();
     const now = new Date().toISOString();
     const captionField = (part.fields as Record<string, unknown> | undefined)
       ?.caption as { value?: unknown } | undefined;
@@ -665,6 +664,13 @@ export async function buildApp(options: AppOptions) {
       typeof captionField?.value === "string"
         ? captionField.value.slice(0, 4000)
         : "";
+    const clientMessageIdField = (part.fields as Record<string, unknown> | undefined)
+      ?.clientMessageId as { value?: unknown } | undefined;
+    const messageId =
+      typeof clientMessageIdField?.value === "string" &&
+      /^[0-9a-f-]{36}$/i.test(clientMessageIdField.value)
+        ? clientMessageIdField.value
+        : randomUUID();
     const viewOnceField = (part.fields as Record<string, unknown> | undefined)
       ?.viewOnce as { value?: unknown } | undefined;
     const viewOnce = viewOnceField?.value === "1" || viewOnceField?.value === "true";

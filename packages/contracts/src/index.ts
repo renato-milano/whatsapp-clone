@@ -20,7 +20,17 @@ export type ChatMessage = {
   editedAt?: string;
   deletedAt?: string;
   reaction?: { emoji: string; count: number; mine: boolean; names?: string[] };
-  attachment?: { id: string; filename: string; mimeType: string; size: number; viewOnce?: boolean; consumedAt?: string };
+  attachment?: {
+    id: string;
+    filename: string;
+    mimeType: string;
+    size: number;
+    viewOnce?: boolean;
+    consumedAt?: string;
+    localUrl?: string;
+    pending?: boolean;
+  };
+  deliveryStatus?: "uploading" | "failed";
 };
 
 export interface ServerEvents {

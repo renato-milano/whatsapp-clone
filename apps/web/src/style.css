@@ -671,6 +671,43 @@ footer {
 .sending-preview {
   opacity: 0.7;
 }
+.attachment-sending,
+.attachment-failed {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #66806b;
+  font-size: 11px;
+}
+.attachment-sending .message-image {
+  max-width: 180px;
+  max-height: 140px;
+  opacity: 0.72;
+}
+.attachment-sending::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  flex: 0 0 10px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: attachment-spin 900ms linear infinite;
+}
+.attachment-failed {
+  color: #9c4b43;
+}
+.failed-check {
+  color: #b34d43;
+}
+.sending-check {
+  color: #66806b;
+  display: inline-block;
+  animation: attachment-spin 900ms linear infinite;
+}
+@keyframes attachment-spin {
+  to { transform: rotate(360deg); }
+}
 .message time {
   text-align: right;
   margin-top: 3px;

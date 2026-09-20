@@ -524,7 +524,15 @@ function Chat({
         setUnreadCount((count) => count + 1);
       setMessages((current) =>
         current.some((item) => item.id === message.id)
-          ? current
+          ? current.map((item) =>
+              item.id === message.id
+                ? (() => {
+                    if (item.attachment?.localUrl)
+                      URL.revokeObjectURL(item.attachment.localUrl);
+                    return { ...item, ...message, replyTo: message.replyTo ?? item.replyTo };
+                  })()
+                : item,
+            )
           : [...current, message],
       );
     });
@@ -635,26 +643,64 @@ function Chat({
     event.preventDefault();
     const text = body.trim();
     if (pendingFile) {
+      const file = pendingFile;
+      const messageId = crypto.randomUUID();
+      const reply = replyTo;
+      const localUrl = file.type.startsWith("image/")
+        ? URL.createObjectURL(file)
+        : undefined;
+      const optimisticMessage: ChatMessage = {
+        id: messageId,
+        conversationId: conversation.id,
+        memberId: conversation.member.id,
+        authorName: conversation.member.displayName,
+        body: text,
+        createdAt: new Date().toISOString(),
+        replyTo: reply
+          ? { id: reply.id, authorName: reply.authorName, body: reply.body }
+          : undefined,
+        deliveryStatus: "uploading",
+        attachment: {
+          id: `local-${messageId}`,
+          filename: file.name,
+          mimeType: file.type || "application/octet-stream",
+          size: file.size,
+          viewOnce,
+          localUrl,
+          pending: true,
+        },
+      };
+      setMessages((current) => [...current, optimisticMessage]);
+      setBody("");
+      setReplyTo(undefined);
+      setPendingFile(undefined);
+      setAttachmentPreview(undefined);
+      const uploadViewOnce = viewOnce;
+      setViewOnce(false);
       const form = new FormData();
       form.append("caption", text);
-      if (replyTo?.id) form.append("replyToId", replyTo.id);
-      form.append("file", pendingFile);
-      if (viewOnce) form.append("viewOnce", "1");
-      const response = await fetch("/api/v1/messages/attachment", {
-        method: "POST",
-        body: form,
-        credentials: "include",
-      });
-      if (!response.ok) setError("Upload non riuscito");
-      else {
-        setBody("");
-        setReplyTo(undefined);
-        setPendingFile(undefined);
-        setAttachmentPreview(undefined);
-        setViewOnce(false);
+      if (reply?.id) form.append("replyToId", reply.id);
+      form.append("clientMessageId", messageId);
+      if (uploadViewOnce) form.append("viewOnce", "1");
+      form.append("file", file);
+      try {
+        const response = await fetch("/api/v1/messages/attachment", {
+          method: "POST",
+          body: form,
+          credentials: "include",
+        });
+        if (!response.ok) throw new Error("Upload non riuscito");
         void api<{ messages: ChatMessage[] }>("/api/v1/messages").then(
           (result) => setMessages(result.messages),
         );
+      } catch (caught) {
+        if (localUrl) URL.revokeObjectURL(localUrl);
+        setError(caught instanceof Error ? caught.message : "Upload non riuscito");
+        setMessages((current) => current.map((item) =>
+          item.id === messageId
+            ? { ...item, deliveryStatus: "failed" as const }
+            : item,
+        ));
       }
       return;
     }
@@ -1000,7 +1046,20 @@ function Chat({
                 <small>{message.authorName}</small>
               ) : null}
               <div className="message-content">
-                {message.attachment?.viewOnce && message.memberId !== conversation.member.id && !message.attachment.consumedAt && !consumedMedia.has(message.attachment.id) && (
+                {message.deliveryStatus === "uploading" && message.attachment && (
+                  <div className="attachment-sending" aria-live="polite">
+                    {message.attachment.localUrl && message.attachment.mimeType.startsWith("image/") && (
+                      <img className="message-image" src={message.attachment.localUrl} alt={message.attachment.filename} />
+                    )}
+                    <span>Invio in corso…</span>
+                  </div>
+                )}
+                {message.deliveryStatus === "failed" && message.attachment && (
+                  <div className="attachment-failed" role="status">
+                    <span>Invio non riuscito: {message.attachment.filename}</span>
+                  </div>
+                )}
+                {!message.deliveryStatus && message.attachment?.viewOnce && message.memberId !== conversation.member.id && !message.attachment.consumedAt && !consumedMedia.has(message.attachment.id) && (
                   <button
                     type="button"
                     className="view-once-button"
@@ -1014,13 +1073,13 @@ function Chat({
                     Apri {message.attachment.mimeType.startsWith("video/") ? "video" : "foto"}
                   </button>
                 )}
-                {message.attachment?.viewOnce && message.memberId !== conversation.member.id && (message.attachment.consumedAt || consumedMedia.has(message.attachment.id)) && (
+                {!message.deliveryStatus && message.attachment?.viewOnce && message.memberId !== conversation.member.id && (message.attachment.consumedAt || consumedMedia.has(message.attachment.id)) && (
                   <span className="view-once-consumed">Media aperto</span>
                 )}
-                {message.attachment?.viewOnce && message.memberId === conversation.member.id && (
+                {!message.deliveryStatus && message.attachment?.viewOnce && message.memberId === conversation.member.id && (
                   <span className="view-once-consumed">Media inviato</span>
                 )}
-                {!message.attachment?.viewOnce && message.attachment?.mimeType.startsWith("image/") && (
+                {!message.deliveryStatus && !message.attachment?.viewOnce && message.attachment?.mimeType.startsWith("image/") && (
                   <img
                     onLoad={() => {
                       if (atBottomRef.current && messagesRef.current)
@@ -1031,32 +1090,32 @@ function Chat({
                       setFullscreenImage(`/media/${message.attachment!.id}`)
                     }
                     className="message-image"
-                    src={`/media/${message.attachment.id}`}
+                    src={message.attachment.localUrl ?? `/media/${message.attachment.id}`}
                     alt={message.attachment.filename}
                   />
                 )}
-                {message.attachment?.mimeType.startsWith("audio/") && (
+                {!message.deliveryStatus && message.attachment?.mimeType.startsWith("audio/") && (
                   <audio
                     className="message-audio"
                     controls
                     preload="metadata"
-                    src={`/media/${message.attachment.id}`}
+                    src={message.attachment.localUrl ?? `/media/${message.attachment.id}`}
                     aria-label={`Riproduci audio ${message.attachment.filename}`}
                   />
                 )}
-                {!message.attachment?.viewOnce && message.attachment?.mimeType.startsWith("video/") && (
+                {!message.deliveryStatus && !message.attachment?.viewOnce && message.attachment?.mimeType.startsWith("video/") && (
                   <video
                     className="message-video"
                     controls
                     preload="metadata"
-                    src={`/media/${message.attachment.id}`}
+                    src={message.attachment.localUrl ?? `/media/${message.attachment.id}`}
                     aria-label={`Riproduci video ${message.attachment.filename}`}
                     onClick={() =>
                       setFullscreenVideo(`/media/${message.attachment!.id}`)
                     }
                   />
                 )}
-                {message.attachment &&
+                {!message.deliveryStatus && message.attachment &&
                   !message.attachment.mimeType.startsWith("image/") &&
                   !message.attachment.mimeType.startsWith("audio/") &&
                   !message.attachment.mimeType.startsWith("video/") && (
@@ -1083,9 +1142,11 @@ function Chat({
                     hour: "2-digit",
                     minute: "2-digit",
                   })}
-                  {message.memberId === conversation.member.id && (
-                    <span className="checks">✓✓</span>
-                  )}
+                  {message.memberId === conversation.member.id && (message.deliveryStatus === "uploading" ? (
+                    <span className="checks sending-check">◌</span>
+                  ) : message.deliveryStatus === "failed" ? (
+                    <span className="checks failed-check">!</span>
+                  ) : <span className="checks">✓✓</span>)}
                   {message.editedAt && (
                     <span className="edited-label">modificato</span>
                   )}
