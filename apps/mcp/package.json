@@ -1,0 +1,41 @@
+{
+  "name": "@private-chat/mcp",
+  "version": "0.1.0",
+  "private": false,
+  "description": "MCP connector to read and send messages in a private chat as an existing member.",
+  "keywords": [
+    "mcp",
+    "modelcontextprotocol",
+    "chat",
+    "claude-code",
+    "codex"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/renato-milano/whatsapp-clone.git",
+    "directory": "apps/mcp"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22.18.0 <23"
+  },
+  "files": [
+    "dist"
+  ],
+  "bin": {
+    "private-chat-mcp": "dist/cli.js"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --test test/*.test.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "zod": "4.6.5"
+  }
+}

@@ -41,6 +41,11 @@ Questo comando verifica i tipi, esegue i test e compila frontend e backend.
 Per dettagli su struttura, avvio di produzione e configurazione Railway,
 leggi [Sviluppo locale e deployment](docs/09-sviluppo-locale.md).
 
+Per collegare Codex o Claude Code alla chat con il tuo utente, leggi la
+[guida al connettore MCP](docs/10-mcp.md). Gli utenti finali installano il
+connettore da una release GitHub con un comando `npx`; non serve una copia
+del repository.
+
 ## Come utilizzare il dossier
 
 Per iniziare lo sviluppo, leggi prima requisiti e decisioni, poi applica le
