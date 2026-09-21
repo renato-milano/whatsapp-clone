@@ -1982,6 +1982,10 @@ function Chat({
       <form className="composer" onSubmit={send}>
         {recording ? (
           <div className="recording-actions">
+            <div className="recording-status" role="status" aria-live="polite">
+              <span className="recording-status-dot" aria-hidden="true" />
+              Registrazione in corso
+            </div>
             <button
               type="button"
               className="recording-discard"
