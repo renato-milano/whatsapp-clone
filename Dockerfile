@@ -4,6 +4,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 make g+
 COPY package.json package-lock.json tsconfig.base.json ./
 COPY apps/server/package.json apps/server/package.json
 COPY apps/web/package.json apps/web/package.json
+COPY apps/mcp/package.json apps/mcp/package.json
 COPY packages/contracts/package.json packages/contracts/package.json
 RUN npm ci
 COPY apps apps

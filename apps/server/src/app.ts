@@ -27,6 +27,7 @@ import type {
   ServerEvents,
 } from "@private-chat/contracts";
 import { openDatabase } from "./database.js";
+import { registerMcpRoutes } from "./mcp.js";
 import {
   createDeviceSession,
   getAuthContext,
@@ -167,6 +168,9 @@ export async function buildApp(options: AppOptions) {
       const origin = request.headers.origin;
       callback(null, !origin || origin === options.publicOrigin);
     },
+  });
+  registerMcpRoutes(app, db, (message) => {
+    io.to(message.conversationId).emit("chat.message.created", message);
   });
   let spotifyAppToken: { value: string; expiresAt: number } | undefined;
   async function getSpotifyAppToken() {
@@ -533,111 +537,131 @@ export async function buildApp(options: AppOptions) {
       });
     },
   );
-  app.post<{
-    Body: { locator?: unknown; inviteSecret?: unknown; displayName?: unknown };
-  }>("/api/v1/conversations/join", async (request, reply) => {
-    const locator = validateLocator(request.body?.locator);
-    const inviteSecret = validateSecret(request.body?.inviteSecret);
-    const displayName = validateName(request.body?.displayName);
-    if (!locator || !inviteSecret || !displayName)
-      return apiError(reply, 422, "INVALID_JOIN", "Link o nome non valido.");
-    const conversation = db
-      .prepare(
-        "SELECT id, title, invite_hash, invite_open FROM conversations WHERE locator = ?",
+  for (const joinPath of ["/api/v1/conversations/join", "/api/v1/mcp/connect"])
+    app.post<{
+      Body: {
+        locator?: unknown;
+        inviteSecret?: unknown;
+        displayName?: unknown;
+      };
+    }>(joinPath, async (request, reply) => {
+      const locator = validateLocator(request.body?.locator);
+      const inviteSecret = validateSecret(request.body?.inviteSecret);
+      const displayName = validateName(request.body?.displayName);
+      if (!locator || !inviteSecret || !displayName)
+        return apiError(reply, 422, "INVALID_JOIN", "Link o nome non valido.");
+      const conversation = db
+        .prepare(
+          "SELECT id, title, invite_hash, invite_open FROM conversations WHERE locator = ?",
+        )
+        .get(locator) as
+        | {
+            id: string;
+            title: string;
+            invite_hash: string;
+            invite_open: number;
+          }
+        | undefined;
+      if (
+        !conversation ||
+        hashSecret(inviteSecret) !== conversation.invite_hash
       )
-      .get(locator) as
-      | { id: string; title: string; invite_hash: string; invite_open: number }
-      | undefined;
-    if (!conversation || hashSecret(inviteSecret) !== conversation.invite_hash)
-      return apiError(
-        reply,
-        404,
-        "INVITE_INVALID",
-        "Il link di ingresso non è valido.",
-      );
-    const existing = db
-      .prepare(
-        "SELECT id, display_name, role FROM members WHERE conversation_id = ? AND revoked_at IS NULL AND lower(display_name) = lower(?)",
-      )
-      .get(conversation.id, displayName) as
-      | { id: string; display_name: string; role: "owner" | "member" }
-      | undefined;
-    if (existing) {
-      createDeviceSession(
-        db,
-        existing.id,
-        conversation.id,
-        secureCookie,
-        reply,
-      );
-      return reply.code(200).send({
+        return apiError(
+          reply,
+          404,
+          "INVITE_INVALID",
+          "Il link di ingresso non è valido.",
+        );
+      const existing = db
+        .prepare(
+          "SELECT id, display_name, role FROM members WHERE conversation_id = ? AND revoked_at IS NULL AND lower(display_name) = lower(?)",
+        )
+        .get(conversation.id, displayName) as
+        | { id: string; display_name: string; role: "owner" | "member" }
+        | undefined;
+      if (existing) {
+        createDeviceSession(
+          db,
+          existing.id,
+          conversation.id,
+          secureCookie,
+          reply,
+        );
+        return reply.code(200).send({
+          conversation: {
+            id: conversation.id,
+            locator,
+            title: conversation.title,
+            member: {
+              id: existing.id,
+              displayName: existing.display_name,
+              role: existing.role,
+            },
+          },
+          recognized: true,
+        });
+      }
+      if (joinPath === "/api/v1/mcp/connect")
+        return apiError(
+          reply,
+          404,
+          "MEMBER_NOT_FOUND",
+          "Nome utente non presente nella chat. Usa il nome di un membro esistente.",
+        );
+      if (conversation.invite_open !== 1)
+        return apiError(
+          reply,
+          404,
+          "INVITE_INVALID",
+          "Il link di ingresso non è valido.",
+        );
+      const memberId = randomUUID();
+      const recoveryCode = secretToken();
+      const now = new Date().toISOString();
+      try {
+        db.transaction(() => {
+          const occupied = db
+            .prepare(
+              "SELECT 1 FROM members WHERE conversation_id = ? AND slot = 2 AND revoked_at IS NULL",
+            )
+            .get(conversation.id);
+          if (occupied) throw new Error("ROOM_FULL");
+          db.prepare(
+            "INSERT INTO members (id, conversation_id, slot, display_name, role, recovery_hash, created_at) VALUES (?, ?, 2, ?, 'member', ?, ?)",
+          ).run(
+            memberId,
+            conversation.id,
+            displayName,
+            hashSecret(recoveryCode),
+            now,
+          );
+          db.prepare(
+            "UPDATE conversations SET invite_open = 0 WHERE id = ?",
+          ).run(conversation.id);
+        })();
+      } catch (error) {
+        return apiError(
+          reply,
+          error instanceof Error && error.message === "ROOM_FULL" ? 409 : 500,
+          error instanceof Error && error.message === "ROOM_FULL"
+            ? "ROOM_FULL"
+            : "JOIN_FAILED",
+          error instanceof Error && error.message === "ROOM_FULL"
+            ? "I posti della conversazione sono già occupati."
+            : "Non è stato possibile entrare nella conversazione.",
+        );
+      }
+      createDeviceSession(db, memberId, conversation.id, secureCookie, reply);
+      return reply.code(201).send({
         conversation: {
           id: conversation.id,
           locator,
           title: conversation.title,
-          member: {
-            id: existing.id,
-            displayName: existing.display_name,
-            role: existing.role,
-          },
+          member: { id: memberId, displayName, role: "member" },
         },
-        recognized: true,
+        recoveryCode,
       });
-    }
-    if (conversation.invite_open !== 1)
-      return apiError(
-        reply,
-        404,
-        "INVITE_INVALID",
-        "Il link di ingresso non è valido.",
-      );
-    const memberId = randomUUID();
-    const recoveryCode = secretToken();
-    const now = new Date().toISOString();
-    try {
-      db.transaction(() => {
-        const occupied = db
-          .prepare(
-            "SELECT 1 FROM members WHERE conversation_id = ? AND slot = 2 AND revoked_at IS NULL",
-          )
-          .get(conversation.id);
-        if (occupied) throw new Error("ROOM_FULL");
-        db.prepare(
-          "INSERT INTO members (id, conversation_id, slot, display_name, role, recovery_hash, created_at) VALUES (?, ?, 2, ?, 'member', ?, ?)",
-        ).run(
-          memberId,
-          conversation.id,
-          displayName,
-          hashSecret(recoveryCode),
-          now,
-        );
-        db.prepare("UPDATE conversations SET invite_open = 0 WHERE id = ?").run(
-          conversation.id,
-        );
-      })();
-    } catch (error) {
-      return apiError(
-        reply,
-        error instanceof Error && error.message === "ROOM_FULL" ? 409 : 500,
-        error instanceof Error && error.message === "ROOM_FULL"
-          ? "ROOM_FULL"
-          : "JOIN_FAILED",
-        error instanceof Error && error.message === "ROOM_FULL"
-          ? "I posti della conversazione sono già occupati."
-          : "Non è stato possibile entrare nella conversazione.",
-      );
-    }
-    createDeviceSession(db, memberId, conversation.id, secureCookie, reply);
-    return reply.code(201).send({
-      conversation: {
-        id: conversation.id,
-        locator,
-        title: conversation.title,
-        member: { id: memberId, displayName, role: "member" },
-      },
-      recoveryCode,
     });
-  });
   app.get("/api/v1/me", async (request, reply) => {
     const auth = getAuthContext(db, request);
     if (!auth)
