@@ -488,6 +488,7 @@ function Chat({
   const longPressTimer = useRef<number | undefined>(undefined);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const recordingChunks = useRef<Blob[]>([]);
+  const recordingActionRef = useRef<"send" | "discard">("discard");
   const pendingScrollRestore = useRef<
     { top: number; height: number } | undefined
   >(undefined);
@@ -1107,10 +1108,7 @@ function Chat({
     setMenuMessage(undefined);
   }
   async function toggleRecording() {
-    if (recording) {
-      recorderRef.current?.stop();
-      return;
-    }
+    if (recording || recorderRef.current) return;
     if (
       !window.isSecureContext &&
       !["localhost", "127.0.0.1"].includes(window.location.hostname)
@@ -1142,9 +1140,14 @@ function Chat({
       };
       recorder.onstop = async () => {
         stream.getTracks().forEach((track) => track.stop());
+        const action = recordingActionRef.current;
         const blob = new Blob(recordingChunks.current, {
           type: recorder.mimeType || "audio/mp4",
         });
+        recordingChunks.current = [];
+        recorderRef.current = null;
+        setRecording(false);
+        if (action === "discard" || blob.size === 0) return;
         const extension = blob.type.includes("webm") ? "webm" : "m4a";
         const file = new File(
           [blob],
@@ -1159,14 +1162,18 @@ function Chat({
           credentials: "include",
         });
         if (!response.ok) setError("Invio del messaggio vocale non riuscito.");
-        setRecording(false);
-        recorderRef.current = null;
       };
       recorder.start();
       setRecording(true);
     } catch {
       setError("Non è stato possibile accedere al microfono.");
     }
+  }
+  function stopRecording(action: "send" | "discard") {
+    const recorder = recorderRef.current;
+    if (!recorder) return;
+    recordingActionRef.current = action;
+    recorder.stop();
   }
   return (
     <main className="chat-shell">
@@ -1973,142 +1980,165 @@ function Chat({
         </section>
       )}
       <form className="composer" onSubmit={send}>
-        <input
-          className="file-input"
-          type="file"
-          id="attachment"
-          onChange={async (event) => {
-            const file = event.target.files?.[0];
-            if (!file) return;
-            setPendingFile(file);
-            setAttachmentPreview(
-              file.type.startsWith("image/")
-                ? URL.createObjectURL(file)
-                : file.name,
-            );
-            event.currentTarget.value = "";
-          }}
-        />
-        <div className="input-wrap">
-          <textarea
-            ref={textareaRef}
-            value={body}
-            onFocus={() => {
-              setInputFocused(true);
-              setMenuMessage(undefined);
-            }}
-            onBlur={() => setInputFocused(false)}
-            onChange={(event) => {
-              const value = event.target.value;
-              setBody(value);
-              socketRef.current?.emit("chat.typing", {
-                isTyping: value.length > 0,
-              });
-              window.clearTimeout(typingTimer.current);
-              if (value.length > 0)
-                typingTimer.current = window.setTimeout(() => {
-                  socketRef.current?.emit("chat.typing", { isTyping: false });
-                }, 1800);
-            }}
-            placeholder="Scrivi un messaggio"
-            maxLength={4000}
-            rows={1}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                event.currentTarget.form?.requestSubmit();
-              }
-            }}
-          />
-          <button
-            type="button"
-            className="emoji-button"
-            onClick={() => setShowEmoji((open) => !open)}
-            aria-label="Scegli emoji"
-          >
-            ☺︎
-          </button>
-          <button
-            type="button"
-            className={`music-button${showMusicPicker ? " active" : ""}`}
-            aria-label="Condividi musica Spotify"
-            onClick={() => {
-              if (showMusicPicker) resetMusicPicker();
-              else setShowMusicPicker(true);
-            }}
-          >
-            ♫
-          </button>
-        </div>
-        {attachmentPreview && (
-          <div className="attachment-preview">
+        {recording ? (
+          <div className="recording-actions">
             <button
               type="button"
-              className="attachment-cancel"
-              aria-label="Rimuovi allegato"
-              onClick={() => {
-                setPendingFile(undefined);
-                setAttachmentPreview(undefined);
-                setViewOnce(false);
-              }}
+              className="recording-discard"
+              onClick={() => stopRecording("discard")}
             >
-              ×
+              Elimina
             </button>
-            {attachmentPreview.startsWith("blob:") ? (
-              <img src={attachmentPreview} alt="Anteprima allegato" />
-            ) : (
-              attachmentPreview
+            <button
+              type="button"
+              className="recording-send"
+              onClick={() => stopRecording("send")}
+            >
+              Invia
+            </button>
+          </div>
+        ) : (
+          <>
+            <input
+              className="file-input"
+              type="file"
+              id="attachment"
+              onChange={async (event) => {
+                const file = event.target.files?.[0];
+                if (!file) return;
+                setPendingFile(file);
+                setAttachmentPreview(
+                  file.type.startsWith("image/")
+                    ? URL.createObjectURL(file)
+                    : file.name,
+                );
+                event.currentTarget.value = "";
+              }}
+            />
+            <div className="input-wrap">
+              <textarea
+                ref={textareaRef}
+                value={body}
+                onFocus={() => {
+                  setInputFocused(true);
+                  setMenuMessage(undefined);
+                }}
+                onBlur={() => setInputFocused(false)}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setBody(value);
+                  socketRef.current?.emit("chat.typing", {
+                    isTyping: value.length > 0,
+                  });
+                  window.clearTimeout(typingTimer.current);
+                  if (value.length > 0)
+                    typingTimer.current = window.setTimeout(() => {
+                      socketRef.current?.emit("chat.typing", {
+                        isTyping: false,
+                      });
+                    }, 1800);
+                }}
+                placeholder="Scrivi un messaggio"
+                maxLength={4000}
+                rows={1}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    event.currentTarget.form?.requestSubmit();
+                  }
+                }}
+              />
+              <button
+                type="button"
+                className="emoji-button"
+                onClick={() => setShowEmoji((open) => !open)}
+                aria-label="Scegli emoji"
+              >
+                ☺︎
+              </button>
+              <button
+                type="button"
+                className={`music-button${showMusicPicker ? " active" : ""}`}
+                aria-label="Condividi musica Spotify"
+                onClick={() => {
+                  if (showMusicPicker) resetMusicPicker();
+                  else setShowMusicPicker(true);
+                }}
+              >
+                ♫
+              </button>
+            </div>
+            {attachmentPreview && (
+              <div className="attachment-preview">
+                <button
+                  type="button"
+                  className="attachment-cancel"
+                  aria-label="Rimuovi allegato"
+                  onClick={() => {
+                    setPendingFile(undefined);
+                    setAttachmentPreview(undefined);
+                    setViewOnce(false);
+                  }}
+                >
+                  ×
+                </button>
+                {attachmentPreview.startsWith("blob:") ? (
+                  <img src={attachmentPreview} alt="Anteprima allegato" />
+                ) : (
+                  attachmentPreview
+                )}
+                {pendingFile && (
+                  <label className="view-once-toggle">
+                    <input
+                      type="checkbox"
+                      checked={viewOnce}
+                      onChange={(event) => setViewOnce(event.target.checked)}
+                    />
+                    Visualizza una volta
+                  </label>
+                )}
+              </div>
             )}
-            {pendingFile && (
-              <label className="view-once-toggle">
-                <input
-                  type="checkbox"
-                  checked={viewOnce}
-                  onChange={(event) => setViewOnce(event.target.checked)}
-                />
-                Visualizza una volta
+            {!body.trim() && !inputFocused && (
+              <label
+                className={`attach-button${body.trim() ? " hidden" : ""}`}
+                htmlFor="attachment"
+                aria-label="Invia foto"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h2l1.2-1.5h4.6L15.5 4h2A2.5 2.5 0 0 1 20 6.5v10A2.5 2.5 0 0 1 17.5 19h-11A2.5 2.5 0 0 1 4 16.5z" />
+                  <circle cx="12" cy="11.5" r="3.2" />
+                </svg>
               </label>
             )}
-          </div>
-        )}
-        {!body.trim() && !inputFocused && (
-          <label
-            className={`attach-button${body.trim() ? " hidden" : ""}`}
-            htmlFor="attachment"
-            aria-label="Invia foto"
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h2l1.2-1.5h4.6L15.5 4h2A2.5 2.5 0 0 1 20 6.5v10A2.5 2.5 0 0 1 17.5 19h-11A2.5 2.5 0 0 1 4 16.5z" />
-              <circle cx="12" cy="11.5" r="3.2" />
-            </svg>
-          </label>
-        )}
-        {!body.trim() && !pendingFile && !inputFocused && (
-          <button
-            type="button"
-            className={`recording-button${recording ? " recording" : ""}`}
-            aria-label={
-              recording
-                ? "Ferma e invia messaggio vocale"
-                : "Registra messaggio vocale"
-            }
-            onClick={() => void toggleRecording()}
-          >
-            {recording ? (
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <rect x="7" y="7" width="10" height="10" rx="2" />
-              </svg>
-            ) : (
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <rect x="9" y="3" width="6" height="11" rx="3" />
-                <path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8" />
-              </svg>
+            {!body.trim() && !pendingFile && !inputFocused && (
+              <button
+                type="button"
+                className={`recording-button${recording ? " recording" : ""}`}
+                aria-label={
+                  recording
+                    ? "Ferma e invia messaggio vocale"
+                    : "Registra messaggio vocale"
+                }
+                onClick={() => void toggleRecording()}
+              >
+                {recording ? (
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <rect x="7" y="7" width="10" height="10" rx="2" />
+                  </svg>
+                ) : (
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <rect x="9" y="3" width="6" height="11" rx="3" />
+                    <path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8" />
+                  </svg>
+                )}
+              </button>
             )}
-          </button>
+            <button className="submit" aria-label="Invia messaggio">
+              ➤
+            </button>
+          </>
         )}
-        <button className="submit" aria-label="Invia messaggio">
-          ➤
-        </button>
       </form>
       {showEmoji && (
         <div className="emoji-picker">

@@ -822,6 +822,34 @@ footer {
   margin-bottom: 20px;
   position: relative;
 }
+.recording-actions {
+  display: flex;
+  width: 100%;
+  gap: 10px;
+}
+.recording-actions button {
+  flex: 1;
+  min-height: 46px;
+  border-radius: 14px;
+  font-size: 13px;
+  font-weight: 700;
+}
+.recording-discard {
+  border-color: #d6c5bd;
+  background: #fff7f3;
+  color: #8d4a3e;
+}
+.recording-discard:hover {
+  background: #ffede7;
+}
+.recording-send {
+  border-color: #285e49;
+  background: #285e49;
+  color: #fff;
+}
+.recording-send:hover {
+  background: #397154;
+}
 .composer input {
   flex: 1;
   min-width: 0;
