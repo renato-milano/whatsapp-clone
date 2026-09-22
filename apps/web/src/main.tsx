@@ -431,12 +431,10 @@ function Chat({
   conversation,
   inviteLink,
   recoveryCode,
-  onLogout,
 }: {
   conversation: Conversation;
   inviteLink?: string;
   recoveryCode?: string;
-  onLogout: () => void;
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [body, setBody] = useState("");
@@ -1302,6 +1300,16 @@ function Chat({
             <path d="m16 16 5 5" />
           </svg>
         </button>
+        <span className="label">{conversation.member.displayName}</span>
+        {inviteLink && (
+          <button
+            className="info-button"
+            aria-expanded={showInvite}
+            onClick={() => setShowInvite((open) => !open)}
+          >
+            {showInvite ? "Chiudi info" : "Info stanza"}
+          </button>
+        )}
         <button
           className="saved-toggle"
           aria-haspopup="dialog"
@@ -1314,25 +1322,7 @@ function Chat({
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="m12 3.6 2.6 5.3 5.8.85-4.2 4.1 1 5.75L12 16.9l-5.2 2.7 1-5.75-4.2-4.1 5.8-.85z" />
           </svg>
-          Salvati
-        </button>
-        <span className="label">{conversation.member.displayName}</span>
-        {inviteLink && (
-          <button
-            className="info-button"
-            aria-expanded={showInvite}
-            onClick={() => setShowInvite((open) => !open)}
-          >
-            {showInvite ? "Chiudi info" : "Info stanza"}
-          </button>
-        )}
-        <button
-          onClick={() => {
-            void api("/api/v1/logout", { method: "POST" });
-            onLogout();
-          }}
-        >
-          Nuova chat
+          Messaggi
         </button>
       </header>
       {showSearch && (
@@ -2401,18 +2391,53 @@ function Chat({
                       className="saved-item"
                       onClick={() => void openSavedMessage(item.id)}
                     >
-                      <span className="saved-item-head">
-                        <strong>
-                          {item.memberId === conversation.member.id
-                            ? "Tu"
-                            : item.authorName}
-                        </strong>
-                        <time dateTime={item.createdAt}>
-                          {savedTimestamp(item.createdAt)}
-                        </time>
-                      </span>
-                      <span className="saved-item-body">
-                        {savedPreview(item)}
+                      {/* Safari does not lay out a <button> as a flex
+                          container reliably, so the row lives in a span. */}
+                      <span className="saved-item-inner">
+                        {item.attachmentId &&
+                          item.attachmentMime?.startsWith("image/") && (
+                            <span className="saved-thumb">
+                              <img
+                                src={`/media/${item.attachmentId}`}
+                                loading="lazy"
+                                alt=""
+                              />
+                            </span>
+                          )}
+                        {item.attachmentId &&
+                          item.attachmentMime?.startsWith("video/") && (
+                            <span className="saved-thumb">
+                              {/* The fragment asks for the first frame: a video
+                                  without a poster would render as an empty box. */}
+                              <video
+                                src={`/media/${item.attachmentId}#t=0.1`}
+                                preload="metadata"
+                                muted
+                                playsInline
+                              />
+                              <span
+                                className="saved-thumb-play"
+                                aria-hidden="true"
+                              >
+                                ▶
+                              </span>
+                            </span>
+                          )}
+                        <span className="saved-item-text">
+                          <span className="saved-item-head">
+                            <strong>
+                              {item.memberId === conversation.member.id
+                                ? "Tu"
+                                : item.authorName}
+                            </strong>
+                            <time dateTime={item.createdAt}>
+                              {savedTimestamp(item.createdAt)}
+                            </time>
+                          </span>
+                          <span className="saved-item-body">
+                            {savedPreview(item)}
+                          </span>
+                        </span>
                       </span>
                     </button>
                     <button
@@ -2504,13 +2529,6 @@ function App() {
         conversation={conversation}
         inviteLink={inviteLink}
         recoveryCode={recoveryCode}
-        onLogout={() => {
-          localStorage.removeItem("chat_recovery_code");
-          localStorage.removeItem("chat_invite_link");
-          setConversation(null);
-          setRecoveryCode(undefined);
-          setInviteLink(undefined);
-        }}
       />
     );
   return (

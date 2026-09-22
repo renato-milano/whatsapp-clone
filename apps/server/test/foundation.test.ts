@@ -441,6 +441,29 @@ test("a quoted message without text is described by its own media", () => {
   assert.equal(previewText({ body: "" }), "Messaggio");
 });
 
+const BOUNDARY = "----privatechattest";
+
+// Minimal multipart body: the upload handler reads the plain fields that
+// precede the file part, so their order matters here.
+function uploadBody(
+  filename: string,
+  mime: string,
+  fields: Record<string, string> = {},
+) {
+  return Buffer.concat([
+    ...Object.entries(fields).map((entry) =>
+      Buffer.from(
+        `--${BOUNDARY}\r\nContent-Disposition: form-data; name="${entry[0]}"\r\n\r\n${entry[1]}\r\n`,
+      ),
+    ),
+    Buffer.from(
+      `--${BOUNDARY}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: ${mime}\r\n\r\n`,
+    ),
+    Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+    Buffer.from(`\r\n--${BOUNDARY}--\r\n`),
+  ]);
+}
+
 test("replying to a photo quotes the photo, over the socket and after a reload", async () => {
   const dir = mkdtempSync(join(tmpdir(), "private-chat-reply-"));
   const origin = "http://localhost:5173";
@@ -452,21 +475,14 @@ test("replying to a photo quotes the photo, over the socket and after a reload",
     payload: { displayName: "Ren" },
   });
   const ownerCookie = String(created.headers["set-cookie"]).split(";")[0];
-  const boundary = "----privatechattest";
   const uploaded = await app.inject({
     method: "POST",
     url: "/api/v1/messages/attachment",
     headers: {
       cookie: ownerCookie,
-      "content-type": `multipart/form-data; boundary=${boundary}`,
+      "content-type": `multipart/form-data; boundary=${BOUNDARY}`,
     },
-    payload: Buffer.concat([
-      Buffer.from(
-        `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="foto.png"\r\nContent-Type: image/png\r\n\r\n`,
-      ),
-      Buffer.from([0x89, 0x50, 0x4e, 0x47]),
-      Buffer.from(`\r\n--${boundary}--\r\n`),
-    ]),
+    payload: uploadBody("foto.png", "image/png"),
   });
   assert.equal(uploaded.statusCode, 201);
   const photoId = (uploaded.json() as { id: string }).id;
@@ -521,6 +537,85 @@ test("replying to a photo quotes the photo, over the socket and after a reload",
     assert.equal(quoted?.replyTo?.body, "Foto");
   } finally {
     socket.disconnect();
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the saved list carries media to show, but never a view-once attachment", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "private-chat-saved-media-"));
+  const app = await buildApp({
+    dataDir: dir,
+    publicOrigin: "http://localhost:5173",
+  });
+  try {
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/conversations",
+      payload: { displayName: "Ren" },
+    });
+    const cookie = String(created.headers["set-cookie"]).split(";")[0];
+    const upload = async (
+      filename: string,
+      mime: string,
+      viewOnce?: boolean,
+    ) => {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/messages/attachment",
+        headers: {
+          cookie,
+          "content-type": `multipart/form-data; boundary=${BOUNDARY}`,
+        },
+        payload: uploadBody(filename, mime, viewOnce ? { viewOnce: "1" } : {}),
+      });
+      assert.equal(response.statusCode, 201);
+      const id = (response.json() as { id: string }).id;
+      assert.equal(
+        (
+          await app.inject({
+            method: "POST",
+            url: `/api/v1/messages/${id}/save`,
+            headers: { cookie },
+            payload: { saved: true },
+          })
+        ).statusCode,
+        200,
+      );
+      return id;
+    };
+    const photo = await upload("foto.png", "image/png");
+    const secret = await upload("segreto.png", "image/png", true);
+    const items = (
+      await app.inject({
+        method: "GET",
+        url: "/api/v1/messages/saved",
+        headers: { cookie },
+      })
+    ).json().items as Array<{
+      id: string;
+      attachmentId: string | null;
+      attachmentMime: string | null;
+    }>;
+    assert.equal(items.length, 2);
+    const saved = items.find((item) => item.id === photo);
+    assert.equal(saved?.attachmentMime, "image/png");
+    assert.ok(saved?.attachmentId, "a regular photo is renderable in the list");
+    // Rendering this one would consume it before it is ever opened.
+    assert.equal(
+      items.find((item) => item.id === secret)?.attachmentId,
+      null,
+      "a view-once photo must not be renderable in the list",
+    );
+    // The attachment id the list hands over really serves the media.
+    const media = await app.inject({
+      method: "GET",
+      url: `/media/${saved?.attachmentId}`,
+      headers: { cookie },
+    });
+    assert.equal(media.statusCode, 200);
+    assert.equal(media.headers["content-type"], "image/png");
+  } finally {
     await app.close();
     rmSync(dir, { recursive: true, force: true });
   }

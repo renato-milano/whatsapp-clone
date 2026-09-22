@@ -1165,7 +1165,7 @@ export async function buildApp(options: AppOptions) {
       );
     const items = db
       .prepare(
-        "SELECT m.id, m.member_id AS memberId, u.display_name AS authorName, m.body, m.created_at AS createdAt, s.created_at AS savedAt, mm.title AS musicTitle, a.filename AS attachmentFilename, a.mime_type AS attachmentMime FROM saved_messages s JOIN messages m ON m.id = s.message_id JOIN members u ON u.id = m.member_id LEFT JOIN attachments a ON a.message_id = m.id LEFT JOIN message_music mm ON mm.message_id = m.id WHERE s.member_id = ? AND m.conversation_id = ? AND m.deleted_at IS NULL ORDER BY m.created_at DESC, m.id DESC LIMIT 500",
+        "SELECT m.id, m.member_id AS memberId, u.display_name AS authorName, m.body, m.created_at AS createdAt, s.created_at AS savedAt, mm.title AS musicTitle, CASE WHEN a.view_once = 1 THEN NULL ELSE a.id END AS attachmentId, a.filename AS attachmentFilename, a.mime_type AS attachmentMime FROM saved_messages s JOIN messages m ON m.id = s.message_id JOIN members u ON u.id = m.member_id LEFT JOIN attachments a ON a.message_id = m.id LEFT JOIN message_music mm ON mm.message_id = m.id WHERE s.member_id = ? AND m.conversation_id = ? AND m.deleted_at IS NULL ORDER BY m.created_at DESC, m.id DESC LIMIT 500",
       )
       .all(auth.memberId, auth.conversationId) as SavedMessage[];
     return { items };

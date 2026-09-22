@@ -1513,11 +1513,10 @@ mark {
   gap: 4px;
 }
 .saved-item {
-  display: flex;
+  display: block;
   flex: 1;
   min-width: 0;
-  flex-direction: column;
-  gap: 3px;
+  overflow: hidden;
   padding: 9px 10px;
   border: 0;
   border-radius: 12px;
@@ -1528,6 +1527,44 @@ mark {
 }
 .saved-item:hover {
   background: #edf5e8;
+}
+.saved-item-inner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.saved-thumb {
+  position: relative;
+  display: block;
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  overflow: hidden;
+  border-radius: 9px;
+  background: #e7eee3;
+}
+.saved-thumb img,
+.saved-thumb video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.saved-thumb-play {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-size: 13px;
+  text-shadow: 0 1px 4px #183b3199;
+}
+.saved-item-text {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
 }
 .saved-item-head {
   display: flex;
@@ -1541,11 +1578,11 @@ mark {
   color: #7b8d7e;
   white-space: nowrap;
 }
+/* A saved message wraps onto as many lines as it needs: the list scrolls,
+   and a cut preview hides exactly the words worth keeping. */
 .saved-item-body {
-  overflow: hidden;
   color: #2c4a3b;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
   font-size: 13px;
 }
 .saved-remove {
@@ -1779,15 +1816,13 @@ footer p {
     border-color: #d4e2d1;
   }
 
-  .chat-shell > header .info-button,
-  .chat-shell > header > button:last-child {
+  .chat-shell > header .info-button {
     border: 0;
     background: transparent;
     color: #52705a;
   }
 
-  .chat-shell > header .info-button:hover,
-  .chat-shell > header > button:last-child:hover {
+  .chat-shell > header .info-button:hover {
     background: #edf5e8;
   }
 
@@ -2005,7 +2040,12 @@ footer p {
     padding: 0 14px;
   }
 
+  /* The bar spans the viewport while its content keeps the shell gutter,
+     otherwise the chat background shows through at both sides. */
   .chat-shell > header {
+    margin: 0 -14px;
+    padding-right: 14px;
+    padding-left: 14px;
     background: #fbfdf9;
     border-bottom-color: #d8e3d7;
   }

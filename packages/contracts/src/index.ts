@@ -56,6 +56,9 @@ export type SavedMessage = {
   createdAt: string;
   savedAt: string;
   musicTitle?: string | null;
+  // Absent for a view-once attachment: fetching its content consumes it, so
+  // the saved list must never be able to render one.
+  attachmentId?: string | null;
   attachmentFilename?: string | null;
   attachmentMime?: string | null;
 };
