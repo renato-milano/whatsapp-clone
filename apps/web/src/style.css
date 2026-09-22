@@ -395,6 +395,26 @@ footer {
 .search-toggle:hover {
   background: #edf5e8;
 }
+.chat-shell > header .saved-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 34px;
+  padding: 6px 11px;
+  border: 1px solid #d9e0d4;
+  border-radius: 20px;
+  background: #fff;
+  color: #365b46;
+  font-size: 11px;
+}
+.saved-toggle svg {
+  width: 14px;
+  height: 14px;
+  fill: #dfa32c;
+}
+.chat-shell > header .saved-toggle:hover {
+  background: #edf5e8;
+}
 .search-input {
   margin: 10px 0 0;
   min-height: 38px;
@@ -591,6 +611,23 @@ footer {
 .message.mine .reaction-pill {
   left: auto;
   right: 8px;
+}
+/* The star marks a saved message in the free space left of the timestamp. */
+.message-content {
+  position: relative;
+}
+.saved-star {
+  position: absolute;
+  left: 0;
+  bottom: 1px;
+  display: inline-flex;
+  color: #dfa32c;
+  pointer-events: none;
+}
+.saved-star svg {
+  width: 12px;
+  height: 12px;
+  fill: currentColor;
 }
 .reply-preview {
   border-left: 3px solid #6d9d78;
@@ -1412,6 +1449,120 @@ mark {
     opacity: 1;
   }
 }
+.saved-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 21;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: #183b3166;
+  animation: lightbox-in 160ms ease-out;
+}
+.saved-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(520px, 100%);
+  max-height: min(70dvh, 620px);
+  overflow: hidden;
+  border: 1px solid #d6e4d4;
+  border-radius: 20px;
+  background: #fbfdf9;
+  box-shadow: 0 18px 40px #183b3133;
+}
+.saved-modal > header {
+  flex-shrink: 0;
+  gap: 8px;
+  padding: 14px 18px;
+  border-bottom: 1px solid #e2e9dd;
+  font-size: 14px;
+}
+.saved-close {
+  min-width: 34px;
+  min-height: 34px;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #59715d;
+  font-size: 24px;
+  line-height: 1;
+}
+.saved-close:hover {
+  background: #eaf5e7;
+}
+.saved-empty {
+  margin: 0;
+  padding: 28px 22px;
+  color: #66806b;
+  text-align: center;
+  font-size: 12px;
+}
+.saved-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+}
+.saved-list li {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+}
+.saved-item {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  font-weight: 400;
+}
+.saved-item:hover {
+  background: #edf5e8;
+}
+.saved-item-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  color: #446c48;
+  font-size: 11px;
+}
+.saved-item-head time {
+  color: #7b8d7e;
+  white-space: nowrap;
+}
+.saved-item-body {
+  overflow: hidden;
+  color: #2c4a3b;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.saved-remove {
+  flex: 0 0 38px;
+  min-width: 38px;
+  align-self: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #dfa32c;
+  font-size: 17px;
+  line-height: 1;
+}
+.saved-remove:hover {
+  background: #f6efdd;
+}
 .file-input {
   display: none;
 }
@@ -1480,10 +1631,28 @@ mark {
   .chat-shell > header {
     padding: 9px 0;
   }
+  .chat-shell > header {
+    flex-wrap: wrap;
+  }
+  .chat-shell > header > strong {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .chat-shell > header button {
     min-height: 32px;
     padding: 6px 8px;
     font-size: 10px;
+  }
+  .chat-shell > header .saved-toggle {
+    min-height: 32px;
+    gap: 4px;
+    padding: 5px 9px;
+    font-size: 10px;
+  }
+  .saved-modal {
+    max-height: 78dvh;
   }
   input,
   textarea {
@@ -1694,6 +1863,7 @@ footer p {
   .message-content:has(.message-image),
   .message-content:has(.message-audio),
   .message-content:has(.view-once-button),
+  .message-content:has(.saved-star),
   .message-content:has(> a) {
     padding-bottom: 22px;
   }
@@ -1895,6 +2065,7 @@ footer p {
   .message-content:has(.message-image),
   .message-content:has(.message-audio),
   .message-content:has(.view-once-button),
+  .message-content:has(.saved-star),
   .message-content:has(> a) {
     padding-bottom: 21px;
   }

@@ -24,10 +24,12 @@ import { join } from "node:path";
 import type {
   ChatMessage,
   ClientEvents,
+  SavedMessage,
   ServerEvents,
 } from "@private-chat/contracts";
 import { openDatabase } from "./database.js";
 import { registerMcpRoutes } from "./mcp.js";
+import { previewText } from "./preview.js";
 import {
   createDeviceSession,
   getAuthContext,
@@ -311,20 +313,22 @@ export async function buildApp(options: AppOptions) {
       if (payload.replyToId) {
         const reply = db
           .prepare(
-            "SELECT id, body, (SELECT title FROM message_music WHERE message_id = messages.id) AS musicTitle, (SELECT display_name FROM members WHERE id = member_id) AS authorName FROM messages WHERE id = ? AND conversation_id = ?",
+            "SELECT id, body, (SELECT title FROM message_music WHERE message_id = messages.id) AS musicTitle, (SELECT mime_type FROM attachments WHERE message_id = messages.id) AS attachmentMime, (SELECT filename FROM attachments WHERE message_id = messages.id) AS attachmentFilename, (SELECT display_name FROM members WHERE id = member_id) AS authorName FROM messages WHERE id = ? AND conversation_id = ?",
           )
           .get(payload.replyToId, auth.conversationId) as
           | {
               id: string;
               body: string;
               musicTitle?: string;
+              attachmentMime?: string;
+              attachmentFilename?: string;
               authorName: string;
             }
           | undefined;
         if (reply)
           message.replyTo = {
             id: reply.id,
-            body: reply.body || reply.musicTitle || "Brano Spotify",
+            body: previewText(reply),
             authorName: reply.authorName,
           };
       }
@@ -371,10 +375,16 @@ export async function buildApp(options: AppOptions) {
           .get(payload.id, auth.conversationId, auth.memberId);
       if (!auth || !row) return ack({ error: "Messaggio non eliminabile." });
       const deletedAt = new Date().toISOString();
-      db.prepare("UPDATE messages SET deleted_at = ? WHERE id = ?").run(
-        deletedAt,
-        payload.id,
-      );
+      db.transaction(() => {
+        db.prepare("UPDATE messages SET deleted_at = ? WHERE id = ?").run(
+          deletedAt,
+          payload.id,
+        );
+        // A deleted message leaves no content to show in the saved list.
+        db.prepare("DELETE FROM saved_messages WHERE message_id = ?").run(
+          payload.id,
+        );
+      })();
       io.to(auth.conversationId).emit("chat.message.deleted", {
         id: payload.id,
         deletedAt,
@@ -1032,10 +1042,12 @@ export async function buildApp(options: AppOptions) {
     const descendingWindow = !contextIds && !after;
     const rows = db
       .prepare(
-        `SELECT m.id, m.conversation_id AS conversationId, m.member_id AS memberId, u.display_name AS authorName, m.body, m.created_at AS createdAt, m.edited_at AS editedAt, a.id AS attachmentId, a.filename AS attachmentFilename, a.mime_type AS attachmentMime, a.size AS attachmentSize, a.view_once AS attachmentViewOnce, a.consumed_at AS attachmentConsumedAt, mm.track_id AS musicTrackId, mm.track_uri AS musicTrackUri, mm.title AS musicTitle, mm.artist AS musicArtist, mm.album AS musicAlbum, mm.image_url AS musicImageUrl, mm.spotify_url AS musicSpotifyUrl, mm.start_ms AS musicStartMs, mm.end_ms AS musicEndMs, r.id AS replyId, r.body AS replyBody, rmm.title AS replyMusicTitle, ru.display_name AS replyAuthor FROM messages m JOIN members u ON u.id = m.member_id LEFT JOIN attachments a ON a.message_id = m.id LEFT JOIN message_music mm ON mm.message_id = m.id LEFT JOIN messages r ON r.id = m.reply_to_id LEFT JOIN message_music rmm ON rmm.message_id = r.id LEFT JOIN members ru ON ru.id = r.member_id WHERE m.conversation_id = ? AND m.deleted_at IS NULL ${query && !contextIds ? "AND m.body LIKE ?" : ""} ${contextIds ? `AND m.id IN (${contextIds.map(() => "?").join(",")})` : ""} ${before ? "AND (m.created_at < (SELECT created_at FROM messages WHERE id = ?))" : ""} ${after ? "AND (m.created_at > (SELECT created_at FROM messages WHERE id = ?))" : ""} ORDER BY m.created_at ${descendingWindow ? "DESC" : "ASC"}, m.id ${descendingWindow ? "DESC" : "ASC"} ${(!query || before || after) && !contextIds ? "LIMIT 100" : ""}`,
+        `SELECT m.id, m.conversation_id AS conversationId, m.member_id AS memberId, u.display_name AS authorName, m.body, m.created_at AS createdAt, m.edited_at AS editedAt, sv.message_id AS savedFlag, a.id AS attachmentId, a.filename AS attachmentFilename, a.mime_type AS attachmentMime, a.size AS attachmentSize, a.view_once AS attachmentViewOnce, a.consumed_at AS attachmentConsumedAt, mm.track_id AS musicTrackId, mm.track_uri AS musicTrackUri, mm.title AS musicTitle, mm.artist AS musicArtist, mm.album AS musicAlbum, mm.image_url AS musicImageUrl, mm.spotify_url AS musicSpotifyUrl, mm.start_ms AS musicStartMs, mm.end_ms AS musicEndMs, r.id AS replyId, r.body AS replyBody, rmm.title AS replyMusicTitle, ra.mime_type AS replyAttachmentMime, ra.filename AS replyAttachmentFilename, ru.display_name AS replyAuthor FROM messages m JOIN members u ON u.id = m.member_id LEFT JOIN saved_messages sv ON sv.message_id = m.id AND sv.member_id = ? LEFT JOIN attachments a ON a.message_id = m.id LEFT JOIN message_music mm ON mm.message_id = m.id LEFT JOIN messages r ON r.id = m.reply_to_id LEFT JOIN message_music rmm ON rmm.message_id = r.id LEFT JOIN attachments ra ON ra.message_id = r.id LEFT JOIN members ru ON ru.id = r.member_id WHERE m.conversation_id = ? AND m.deleted_at IS NULL ${query && !contextIds ? "AND m.body LIKE ?" : ""} ${contextIds ? `AND m.id IN (${contextIds.map(() => "?").join(",")})` : ""} ${before ? "AND (m.created_at < (SELECT created_at FROM messages WHERE id = ?))" : ""} ${after ? "AND (m.created_at > (SELECT created_at FROM messages WHERE id = ?))" : ""} ORDER BY m.created_at ${descendingWindow ? "DESC" : "ASC"}, m.id ${descendingWindow ? "DESC" : "ASC"} ${(!query || before || after) && !contextIds ? "LIMIT 100" : ""}`,
       )
       .all(
         ...([
+          // The saved join is read before the filters, so its parameter leads.
+          auth.memberId,
           auth.conversationId,
           ...(query && !contextIds ? [`%${query}%`] : []),
           ...(contextIds ?? []),
@@ -1048,9 +1060,12 @@ export async function buildApp(options: AppOptions) {
       ...(query ? { matches: matchRows } : {}),
       messages: (descendingWindow ? rows.reverse() : rows).map((row) => {
         const item = row as ChatMessage & {
+          savedFlag?: string;
           replyId?: string;
           replyBody?: string;
           replyMusicTitle?: string;
+          replyAttachmentMime?: string;
+          replyAttachmentFilename?: string;
           replyAuthor?: string;
           attachmentId?: string;
           attachmentFilename?: string;
@@ -1068,15 +1083,24 @@ export async function buildApp(options: AppOptions) {
           musicStartMs?: number;
           musicEndMs?: number;
         };
+        item.saved = Boolean(item.savedFlag);
+        delete item.savedFlag;
         if (item.replyId)
           item.replyTo = {
             id: item.replyId,
-            body: item.replyBody || item.replyMusicTitle || "Brano Spotify",
+            body: previewText({
+              body: item.replyBody,
+              musicTitle: item.replyMusicTitle,
+              attachmentMime: item.replyAttachmentMime,
+              attachmentFilename: item.replyAttachmentFilename,
+            }),
             authorName: item.replyAuthor ?? "",
           };
         delete item.replyId;
         delete item.replyBody;
         delete item.replyMusicTitle;
+        delete item.replyAttachmentMime;
+        delete item.replyAttachmentFilename;
         delete item.replyAuthor;
         if (item.attachmentId)
           item.attachment = {
@@ -1128,6 +1152,65 @@ export async function buildApp(options: AppOptions) {
       }),
     };
   });
+  // The saved list belongs to the member, not to the conversation: the other
+  // member never sees what has been starred here.
+  app.get("/api/v1/messages/saved", async (request, reply) => {
+    const auth = getAuthContext(db, request);
+    if (!auth)
+      return apiError(
+        reply,
+        401,
+        "SESSION_REQUIRED",
+        "La sessione non è valida.",
+      );
+    const items = db
+      .prepare(
+        "SELECT m.id, m.member_id AS memberId, u.display_name AS authorName, m.body, m.created_at AS createdAt, s.created_at AS savedAt, mm.title AS musicTitle, a.filename AS attachmentFilename, a.mime_type AS attachmentMime FROM saved_messages s JOIN messages m ON m.id = s.message_id JOIN members u ON u.id = m.member_id LEFT JOIN attachments a ON a.message_id = m.id LEFT JOIN message_music mm ON mm.message_id = m.id WHERE s.member_id = ? AND m.conversation_id = ? AND m.deleted_at IS NULL ORDER BY m.created_at DESC, m.id DESC LIMIT 500",
+      )
+      .all(auth.memberId, auth.conversationId) as SavedMessage[];
+    return { items };
+  });
+  app.post<{ Params: { id: string }; Body: { saved?: unknown } }>(
+    "/api/v1/messages/:id/save",
+    async (request, reply) => {
+      const auth = getAuthContext(db, request);
+      if (!auth)
+        return apiError(
+          reply,
+          401,
+          "SESSION_REQUIRED",
+          "La sessione non è valida.",
+        );
+      if (typeof request.body?.saved !== "boolean")
+        return apiError(
+          reply,
+          422,
+          "INVALID_SAVED_STATE",
+          "Indica se salvare o rimuovere il messaggio.",
+        );
+      const message = db
+        .prepare(
+          "SELECT id FROM messages WHERE id = ? AND conversation_id = ? AND deleted_at IS NULL",
+        )
+        .get(request.params.id, auth.conversationId);
+      if (!message)
+        return apiError(
+          reply,
+          404,
+          "MESSAGE_NOT_FOUND",
+          "Messaggio non disponibile.",
+        );
+      if (request.body.saved)
+        db.prepare(
+          "INSERT INTO saved_messages (message_id, member_id, created_at) VALUES (?, ?, ?) ON CONFLICT(message_id, member_id) DO NOTHING",
+        ).run(request.params.id, auth.memberId, new Date().toISOString());
+      else
+        db.prepare(
+          "DELETE FROM saved_messages WHERE message_id = ? AND member_id = ?",
+        ).run(request.params.id, auth.memberId);
+      return { saved: request.body.saved };
+    },
+  );
   app.get<{ Params: { id: string } }>("/media/:id", async (request, reply) => {
     const auth = getAuthContext(db, request);
     if (!auth) return reply.code(401).send();

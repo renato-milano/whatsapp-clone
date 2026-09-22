@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import type Database from "better-sqlite3";
 import type { ChatMessage } from "@private-chat/contracts";
 import { getAuthContext } from "./auth.js";
+import { previewText } from "./preview.js";
 
 // MCP uses the same member sessions as the browser. Its cursor follows insertion
 // order, so messages sharing a timestamp are never skipped while polling.
@@ -87,13 +88,27 @@ export function registerMcpRoutes(
         return reply.code(422).send({ error: { code: "INVALID_MESSAGE" } });
       let replyTo: ChatMessage["replyTo"];
       if (typeof replyToId === "string") {
-        replyTo = db
+        const quoted = db
           .prepare(
-            "SELECT m.id, m.body, u.display_name AS authorName FROM messages m JOIN members u ON u.id = m.member_id WHERE m.id = ? AND m.conversation_id = ? AND m.deleted_at IS NULL",
+            "SELECT m.id, m.body, u.display_name AS authorName, mm.title AS musicTitle, a.mime_type AS attachmentMime, a.filename AS attachmentFilename FROM messages m JOIN members u ON u.id = m.member_id LEFT JOIN attachments a ON a.message_id = m.id LEFT JOIN message_music mm ON mm.message_id = m.id WHERE m.id = ? AND m.conversation_id = ? AND m.deleted_at IS NULL",
           )
-          .get(replyToId, auth.conversationId) as ChatMessage["replyTo"];
-        if (!replyTo)
+          .get(replyToId, auth.conversationId) as
+          | {
+              id: string;
+              body: string;
+              authorName: string;
+              musicTitle?: string;
+              attachmentMime?: string;
+              attachmentFilename?: string;
+            }
+          | undefined;
+        if (!quoted)
           return reply.code(404).send({ error: { code: "MESSAGE_NOT_FOUND" } });
+        replyTo = {
+          id: quoted.id,
+          authorName: quoted.authorName,
+          body: previewText(quoted),
+        };
       }
       const message: ChatMessage = {
         id: randomUUID(),

@@ -20,6 +20,8 @@ export type ChatMessage = {
   editedAt?: string;
   deletedAt?: string;
   reaction?: { emoji: string; count: number; mine: boolean; names?: string[] };
+  // Personal star: true only for the member reading the timeline.
+  saved?: boolean;
   attachment?: {
     id: string;
     filename: string;
@@ -42,6 +44,20 @@ export type ChatMessage = {
     startMs: number;
     endMs: number;
   };
+};
+
+// Entry of the personal "Salvati" list: enough to render a preview with its
+// date without loading the surrounding timeline.
+export type SavedMessage = {
+  id: string;
+  memberId: string;
+  authorName: string;
+  body: string;
+  createdAt: string;
+  savedAt: string;
+  musicTitle?: string | null;
+  attachmentFilename?: string | null;
+  attachmentMime?: string | null;
 };
 
 export interface ServerEvents {

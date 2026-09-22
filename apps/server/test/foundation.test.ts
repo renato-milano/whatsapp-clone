@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { io } from "socket.io-client";
 import { buildApp } from "../src/app.js";
 import { openDatabase } from "../src/database.js";
+import { previewText } from "../src/preview.js";
 
 test("production serves only its frontend directory, not database files", async () => {
   const dir = mkdtempSync(join(tmpdir(), "private-chat-static-data-"));
@@ -61,7 +62,7 @@ test("SQLite persists data across restarts and migrations are idempotent", () =>
           count: number;
         }
       ).count,
-      9,
+      10,
     );
     assert.equal(db.pragma("journal_mode", { simple: true }), "wal");
     db.close();
@@ -276,6 +277,250 @@ test("creates a room, persists identity, and consumes the invite after joining",
     assert.equal(third.statusCode, 404);
     assert.equal(third.json().error.code, "INVITE_INVALID");
   } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("saved messages stay personal to the member who starred them", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "private-chat-saved-"));
+  const app = await buildApp({
+    dataDir: dir,
+    publicOrigin: "http://localhost:5173",
+  });
+  try {
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/conversations",
+      payload: { displayName: "Ren", title: "Chat test" },
+    });
+    const ownerCookie = String(created.headers["set-cookie"]).split(";")[0];
+    const invite = new URL(
+      (created.json() as { inviteLink: string }).inviteLink,
+    );
+    const joined = await app.inject({
+      method: "POST",
+      url: "/api/v1/conversations/join",
+      payload: {
+        locator: invite.pathname.split("/").pop(),
+        inviteSecret: invite.hash.slice(3),
+        displayName: "Angelo",
+      },
+    });
+    const memberCookie = String(joined.headers["set-cookie"]).split(";")[0];
+    const sent = await app.inject({
+      method: "POST",
+      url: "/api/v1/mcp/messages",
+      headers: { cookie: ownerCookie },
+      payload: { body: "Numero del dentista" },
+    });
+    const messageId = (sent.json() as { message: { id: string } }).message.id;
+    assert.equal(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/v1/messages/${messageId}/save`,
+          headers: { cookie: ownerCookie },
+          payload: {},
+        })
+      ).statusCode,
+      422,
+    );
+    // Saving twice is idempotent and never duplicates the list entry.
+    for (const _ of [0, 1])
+      assert.equal(
+        (
+          await app.inject({
+            method: "POST",
+            url: `/api/v1/messages/${messageId}/save`,
+            headers: { cookie: ownerCookie },
+            payload: { saved: true },
+          })
+        ).statusCode,
+        200,
+      );
+    const ownerSaved = await app.inject({
+      method: "GET",
+      url: "/api/v1/messages/saved",
+      headers: { cookie: ownerCookie },
+    });
+    assert.equal(ownerSaved.json().items.length, 1);
+    assert.equal(ownerSaved.json().items[0].id, messageId);
+    assert.equal(ownerSaved.json().items[0].authorName, "Ren");
+    assert.ok(ownerSaved.json().items[0].savedAt);
+    assert.equal(
+      (
+        await app.inject({
+          method: "GET",
+          url: "/api/v1/messages/saved",
+          headers: { cookie: memberCookie },
+        })
+      ).json().items.length,
+      0,
+    );
+    const ownerTimeline = await app.inject({
+      method: "GET",
+      url: "/api/v1/messages",
+      headers: { cookie: ownerCookie },
+    });
+    assert.equal(ownerTimeline.json().messages[0].saved, true);
+    assert.equal(
+      (
+        await app.inject({
+          method: "GET",
+          url: "/api/v1/messages",
+          headers: { cookie: memberCookie },
+        })
+      ).json().messages[0].saved,
+      false,
+    );
+    assert.equal(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/v1/messages/${messageId}/save`,
+          headers: { cookie: ownerCookie },
+          payload: { saved: false },
+        })
+      ).statusCode,
+      200,
+    );
+    assert.equal(
+      (
+        await app.inject({
+          method: "GET",
+          url: "/api/v1/messages/saved",
+          headers: { cookie: ownerCookie },
+        })
+      ).json().items.length,
+      0,
+    );
+    assert.equal(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/v1/messages/00000000-0000-4000-8000-000000000000/save",
+          headers: { cookie: ownerCookie },
+          payload: { saved: true },
+        })
+      ).statusCode,
+      404,
+    );
+    assert.equal(
+      (
+        await app.inject({
+          method: "GET",
+          url: "/api/v1/messages/saved",
+        })
+      ).statusCode,
+      401,
+    );
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a quoted message without text is described by its own media", () => {
+  assert.equal(previewText({ body: "Ciao", musicTitle: "Brano" }), "Ciao");
+  assert.equal(previewText({ body: "", musicTitle: "Brano" }), "Brano");
+  assert.equal(previewText({ body: "", attachmentMime: "image/png" }), "Foto");
+  assert.equal(previewText({ body: "", attachmentMime: "video/mp4" }), "Video");
+  assert.equal(
+    previewText({ body: "", attachmentMime: "audio/mp4" }),
+    "Messaggio vocale",
+  );
+  assert.equal(
+    previewText({
+      body: " ",
+      attachmentMime: "application/pdf",
+      attachmentFilename: "conto.pdf",
+    }),
+    "📎 conto.pdf",
+  );
+  assert.equal(previewText({ body: "" }), "Messaggio");
+});
+
+test("replying to a photo quotes the photo, over the socket and after a reload", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "private-chat-reply-"));
+  const origin = "http://localhost:5173";
+  const app = await buildApp({ dataDir: dir, publicOrigin: origin });
+  const url = await app.listen({ port: 0, host: "127.0.0.1" });
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/v1/conversations",
+    payload: { displayName: "Ren" },
+  });
+  const ownerCookie = String(created.headers["set-cookie"]).split(";")[0];
+  const boundary = "----privatechattest";
+  const uploaded = await app.inject({
+    method: "POST",
+    url: "/api/v1/messages/attachment",
+    headers: {
+      cookie: ownerCookie,
+      "content-type": `multipart/form-data; boundary=${boundary}`,
+    },
+    payload: Buffer.concat([
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="foto.png"\r\nContent-Type: image/png\r\n\r\n`,
+      ),
+      Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]),
+  });
+  assert.equal(uploaded.statusCode, 201);
+  const photoId = (uploaded.json() as { id: string }).id;
+  const socket = io(url, {
+    transports: ["websocket"],
+    extraHeaders: { origin, cookie: ownerCookie },
+    reconnection: false,
+    autoConnect: false,
+  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error("Realtime timeout")),
+        3000,
+      );
+      socket.once("service.ready", () => {
+        clearTimeout(timer);
+        resolve();
+      });
+      socket.once("connect_error", (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+      socket.connect();
+    });
+    const sent = await new Promise<{
+      message?: { replyTo?: { body: string } };
+      error?: string;
+    }>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("Send timeout")), 3000);
+      socket.emit(
+        "chat.message.send",
+        { body: "Che bella", replyToId: photoId },
+        (result: {
+          message?: { replyTo?: { body: string } };
+          error?: string;
+        }) => {
+          clearTimeout(timer);
+          resolve(result);
+        },
+      );
+    });
+    assert.equal(sent.message?.replyTo?.body, "Foto");
+    const timeline = await app.inject({
+      method: "GET",
+      url: "/api/v1/messages",
+      headers: { cookie: ownerCookie },
+    });
+    const quoted = (
+      timeline.json() as { messages: Array<{ replyTo?: { body: string } }> }
+    ).messages.find((message) => message.replyTo);
+    assert.equal(quoted?.replyTo?.body, "Foto");
+  } finally {
+    socket.disconnect();
     await app.close();
     rmSync(dir, { recursive: true, force: true });
   }

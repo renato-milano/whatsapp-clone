@@ -12,7 +12,7 @@ import {
 import { createRoot } from "react-dom/client";
 import { io, type Socket } from "socket.io-client";
 import { type ClientEvents, type ServerEvents } from "@private-chat/contracts";
-import type { ChatMessage } from "@private-chat/contracts";
+import type { ChatMessage, SavedMessage } from "@private-chat/contracts";
 import "./style.css";
 
 type SpotifyTrack = {
@@ -59,6 +59,28 @@ type ApiError = { error?: { message?: string } };
 function dateKey(value: string) {
   const date = new Date(value);
   return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+}
+function savedTimestamp(value: string) {
+  return new Date(value).toLocaleString("it-IT", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+// An attachment without caption still needs a label: never fall back to a
+// music wording, or a photo ends up quoted as a Spotify track.
+function mediaLabel(mime?: string | null, filename?: string | null) {
+  if (mime?.startsWith("image/")) return "Foto";
+  if (mime?.startsWith("video/")) return "Video";
+  if (mime?.startsWith("audio/")) return "Messaggio vocale";
+  return filename ? `📎 ${filename}` : "Messaggio";
+}
+function savedPreview(item: SavedMessage) {
+  if (item.body.trim()) return item.body;
+  if (item.musicTitle) return `♫ ${item.musicTitle}`;
+  return mediaLabel(item.attachmentMime, item.attachmentFilename);
 }
 function dateLabel(value: string) {
   const date = new Date(value);
@@ -443,6 +465,9 @@ function Chat({
   >([]);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [highlightMessage, setHighlightMessage] = useState<string>();
+  const [showSaved, setShowSaved] = useState(false);
+  const [savedList, setSavedList] = useState<SavedMessage[]>([]);
+  const [savedLoading, setSavedLoading] = useState(false);
   const [showInvite, setShowInvite] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
@@ -730,15 +755,21 @@ function Chat({
           },
         })),
     );
-    socket.on("chat.message.deleted", ({ id, deletedAt }) =>
+    socket.on("chat.message.deleted", ({ id, deletedAt }) => {
+      setSavedList((current) => current.filter((item) => item.id !== id));
       setMessages((current) =>
         current.map((item) =>
           item.id === id
-            ? { ...item, deletedAt, body: "Questo messaggio è stato eliminato" }
+            ? {
+                ...item,
+                deletedAt,
+                saved: false,
+                body: "Questo messaggio è stato eliminato",
+              }
             : item,
         ),
-      ),
-    );
+      );
+    });
     socket.on("chat.typing", (payload) => {
       if (payload.memberId !== conversation.member.id)
         setTypingUser(payload.isTyping ? payload.displayName : undefined);
@@ -955,8 +986,90 @@ function Chat({
     return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
   }
   function messagePreview(message: ChatMessage) {
-    return message.body || message.music?.title || "Brano Spotify";
+    if (message.body.trim()) return message.body;
+    if (message.music?.title) return message.music.title;
+    return mediaLabel(
+      message.attachment?.mimeType,
+      message.attachment?.filename,
+    );
   }
+  async function loadSaved() {
+    setSavedLoading(true);
+    try {
+      const result = await api<{ items: SavedMessage[] }>(
+        "/api/v1/messages/saved",
+      );
+      setSavedList(result.items);
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "Messaggi salvati non disponibili.",
+      );
+    } finally {
+      setSavedLoading(false);
+    }
+  }
+  async function toggleSaved(id: string, saved: boolean) {
+    setMessages((current) =>
+      current.map((item) => (item.id === id ? { ...item, saved } : item)),
+    );
+    if (!saved) setSavedList((current) => current.filter((it) => it.id !== id));
+    try {
+      await api(`/api/v1/messages/${encodeURIComponent(id)}/save`, {
+        method: "POST",
+        body: JSON.stringify({ saved }),
+      });
+      if (showSaved) await loadSaved();
+    } catch (caught) {
+      setMessages((current) =>
+        current.map((item) =>
+          item.id === id ? { ...item, saved: !saved } : item,
+        ),
+      );
+      if (showSaved) await loadSaved();
+      setError(
+        caught instanceof Error ? caught.message : "Salvataggio non riuscito.",
+      );
+    }
+  }
+  // The modal jumps into the timeline around the saved message: the server
+  // returns the 50 messages before and the 50 after it.
+  async function openSavedMessage(id: string) {
+    setShowSaved(false);
+    setShowSearch(false);
+    setSearch("");
+    setSearchMatches([]);
+    setSearchTotal(0);
+    try {
+      const result = await api<{ messages: ChatMessage[] }>(
+        `/api/v1/messages?around=${encodeURIComponent(id)}`,
+      );
+      if (!result.messages.length) {
+        setError("Messaggio non più disponibile nella chat.");
+        return;
+      }
+      atBottomRef.current = false;
+      pendingSearchTarget.current = id;
+      setMessages(result.messages);
+      setHighlightMessage(id);
+      window.setTimeout(() => setHighlightMessage(undefined), 1600);
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "Apertura del messaggio non riuscita.",
+      );
+    }
+  }
+  useEffect(() => {
+    if (!showSaved) return;
+    const close = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setShowSaved(false);
+    };
+    document.addEventListener("keydown", close);
+    return () => document.removeEventListener("keydown", close);
+  }, [showSaved]);
   useEffect(() => {
     const closeMenu = (event: PointerEvent) => {
       const target = event.target as HTMLElement;
@@ -1188,6 +1301,20 @@ function Chat({
             <circle cx="10.8" cy="10.8" r="6.2" />
             <path d="m16 16 5 5" />
           </svg>
+        </button>
+        <button
+          className="saved-toggle"
+          aria-haspopup="dialog"
+          aria-expanded={showSaved}
+          onClick={() => {
+            setShowSaved(true);
+            void loadSaved();
+          }}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="m12 3.6 2.6 5.3 5.8.85-4.2 4.1 1 5.75L12 16.9l-5.2 2.7 1-5.75-4.2-4.1 5.8-.85z" />
+          </svg>
+          Salvati
         </button>
         <span className="label">{conversation.member.displayName}</span>
         {inviteLink && (
@@ -1457,7 +1584,7 @@ function Chat({
                   >
                     <strong>{message.replyTo.authorName}</strong>
                     <br />
-                    {message.replyTo.body || "Brano Spotify"}
+                    {message.replyTo.body || "Messaggio"}
                   </div>
                 )}
                 {!index ||
@@ -1663,6 +1790,18 @@ function Chat({
                       </div>
                     )
                   )}
+                  {message.saved && (
+                    <span
+                      className="saved-star"
+                      role="img"
+                      aria-label="Messaggio salvato"
+                      title="Messaggio salvato"
+                    >
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="m12 3.6 2.6 5.3 5.8.85-4.2 4.1 1 5.75L12 16.9l-5.2 2.7 1-5.75-4.2-4.1 5.8-.85z" />
+                      </svg>
+                    </span>
+                  )}
                   <time>
                     {new Date(message.createdAt).toLocaleTimeString([], {
                       hour: "2-digit",
@@ -1756,6 +1895,15 @@ function Chat({
             }}
           >
             <span aria-hidden="true">☺︎</span> Reagisci
+          </button>
+          <button
+            onClick={() => {
+              void toggleSaved(menuMessage.id, !menuMessage.saved);
+              setMenuMessage(undefined);
+            }}
+          >
+            <span aria-hidden="true">★</span>{" "}
+            {menuMessage.saved ? "Rimuovi dai salvati" : "Salva messaggio"}
           </button>
           {menuMessage.memberId === conversation.member.id && (
             <>
@@ -2211,6 +2359,75 @@ function Chat({
               {emoji}
             </button>
           ))}
+        </div>
+      )}
+      {showSaved && (
+        <div
+          className="saved-overlay"
+          onClick={() => setShowSaved(false)}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <section
+            className="saved-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Messaggi salvati"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header>
+              <strong>Messaggi salvati</strong>
+              <button
+                type="button"
+                className="saved-close"
+                aria-label="Chiudi messaggi salvati"
+                onClick={() => setShowSaved(false)}
+              >
+                ×
+              </button>
+            </header>
+            {savedLoading && !savedList.length ? (
+              <p className="saved-empty">Caricamento…</p>
+            ) : !savedList.length ? (
+              <p className="saved-empty">
+                Nessun messaggio salvato. Tieni premuto su un messaggio (o usa
+                il tasto destro) e scegli <strong>Salva messaggio</strong>.
+              </p>
+            ) : (
+              <ul className="saved-list">
+                {savedList.map((item) => (
+                  <li key={item.id}>
+                    <button
+                      type="button"
+                      className="saved-item"
+                      onClick={() => void openSavedMessage(item.id)}
+                    >
+                      <span className="saved-item-head">
+                        <strong>
+                          {item.memberId === conversation.member.id
+                            ? "Tu"
+                            : item.authorName}
+                        </strong>
+                        <time dateTime={item.createdAt}>
+                          {savedTimestamp(item.createdAt)}
+                        </time>
+                      </span>
+                      <span className="saved-item-body">
+                        {savedPreview(item)}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="saved-remove"
+                      aria-label={`Rimuovi dai salvati il messaggio di ${item.authorName}`}
+                      onClick={() => void toggleSaved(item.id, false)}
+                    >
+                      ★
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
         </div>
       )}
       {(fullscreenImage || fullscreenVideo) && (
